@@ -48,15 +48,17 @@
 
         <!-- Экран старта (выбор темы) -->
         <div id="screen-start" class="card hidden">
-            <h2>Выберите тематику</h2>
+            <h2>Выберите тематику (только Максим)</h2>
             <div class="controls">
                 <button class="btn btn-primary" onclick="startGame('modern')">Современные</button>
                 <button class="btn btn-primary" onclick="startGame('xxi')">21 Век</button>
                 <button class="btn btn-primary" onclick="startGame('rpl')">РПЛ</button>
                 <button class="btn btn-primary" onclick="startGame('apl')">АПЛ</button>
             </div>
+            <p id="waiting-start" class="hidden" style="color:#ffeb3b; margin-top: 20px; font-weight: bold;">Ожидание подключения всех игроков...</p>
         </div>
 
+        <!-- Экран игры -->
         <div id="screen-game" class="hidden">
             <div class="card">
                 <div class="players-grid" id="players-container"></div>
@@ -66,6 +68,7 @@
                 <div class="turn-banner" id="turn-banner">Ход: ...</div>
                 <h3 id="pos-title">Позиция: ...</h3>
                 <div class="player-reveal" id="player-name">???</div>
+                <div id="player-cat" style="color:#aaa; margin-bottom:10px;">...</div>
                 <div style="font-size: 24px; margin: 10px 0;">Цена: <span id="current-price" style="color:#4caf50; font-weight:bold;">$1.00</span></div>
                 
                 <div class="controls" id="auction-controls">
@@ -85,7 +88,24 @@
 
     <script>
         const socket = io();
-        let myPlayerIndex = -1; // Кто мы
+        let myPlayerIndex = -1;
+
+        socket.on('connect', () => {
+            // Сообщаем серверу, что мы зашли (нужно для подсчета "все ли в сборе")
+            socket.emit('player_connected');
+        });
+
+        socket.on('players_ready', (isReady) => {
+            // Если зашли все трое, показываем Максу кнопки
+            if (myPlayerIndex === 0) {
+                document.getElementById('waiting-start').classList.add('hidden');
+                document.querySelector('#screen-start .controls').classList.remove('hidden');
+            } else {
+                document.querySelector('#screen-start .controls').classList.add('hidden');
+                document.getElementById('waiting-start').classList.remove('hidden');
+                document.getElementById('waiting-start').textContent = isReady ? "Все в сборе! Ждем, пока Максим выберет тему..." : "Ожидание подключения всех игроков...";
+            }
+        });
 
         socket.on('state_update', (state) => {
             document.getElementById('screen-start').classList.add('hidden');
@@ -113,9 +133,22 @@
             myPlayerIndex = idx;
             document.getElementById('screen-login').classList.add('hidden');
             document.getElementById('screen-start').classList.remove('hidden');
+            
+            // При входе проверяем, все ли на месте
+            if (idx === 0) {
+                document.getElementById('waiting-start').classList.remove('hidden');
+                document.getElementById('waiting-start').textContent = "Ожидание подключения всех игроков...";
+                document.querySelector('#screen-start .controls').classList.add('hidden');
+            } else {
+                document.querySelector('#screen-start .controls').classList.add('hidden');
+                document.getElementById('waiting-start').classList.remove('hidden');
+                document.getElementById('waiting-start').textContent = "Ждем Максима и остальных...";
+            }
+            socket.emit('check_players');
         }
 
         function startGame(theme) {
+            if (myPlayerIndex !== 0) return; // Защита на клиенте
             socket.emit('start_game', { theme: theme });
         }
 
@@ -137,6 +170,7 @@
 
             document.getElementById('pos-title').textContent = `Позиция: ${state.position} (Раунд ${state.round}/3)`;
             document.getElementById('player-name').textContent = state.current_player;
+            document.getElementById('player-cat').textContent = `Категория: ${state.current_cat}`;
             document.getElementById('current-price').textContent = `$${state.current_price.toFixed(2)}`;
             
             const turnName = state.participants[state.turn_index].name;
