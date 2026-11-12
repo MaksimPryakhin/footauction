@@ -18,7 +18,6 @@ game_state = {
     "turn_index": 0, "starting_turn": 0, "active": False,
     "lock": False, "waiting_for_decision": False, "solo_winner_id": None
 }
-POSITIONS = ["ВРТ", "ЦЗ", "ЦОП", "ЦАП", "ФРВ"]
 
 PLAYERS_POOL = {
     "modern": {
@@ -75,8 +74,35 @@ PLAYERS_POOL = {
             "средний": ["Иван Сергеев", "Николай Комличенко", "Матео Кассьерра", "Евгений Марков", "Дмитрий Воробьев"], 
             "слабый": ["Владислав Шитов", "Александр Юшин", "Максим Канунников", "Ари", "Луис Адриано"]
         },
+    },
+    "gym1": {
+        "ВРТ": {
+            "топ": ["Ваня Попов", "Кирилл Князев", "Кирилл Максимов"], 
+            "средний": ["Женек Алцыбеев", "Колян Севрюгин"], 
+            "слабый": ["Настя Павлова", "Вова Исайкин"]
+        },
+        "ЦЗ": {
+            "топ": ["Павел Клинов", "Юрич", "Кисель"], 
+            "средний": ["Никита Валяник", "Никита Махаев"], 
+            "слабый": ["Влад Воронин", "Айдар Майланов"]
+        },
+        "ЦОП": {
+            "топ": ["Тимофей Пикалев", "Святослав Павлюк", "Рома Амирханов", "Анисимов"], 
+            "средний": ["Миша Воробейкин", "Химич"], 
+            "слабый": ["Егор Сивелькин"]
+        },
+        "ФРВ": {
+            "топ": ["Максим Пряхин", "Никита Бальцер", "Саша Должников"], 
+            "средний": ["Кобза", "Сазон"], 
+            "слабый": ["Артем Климов", "Влад Божинский"]
+        },
     }
 }
+
+def get_game_rules(theme):
+    if theme == "gym1":
+        return {"positions": ["ВРТ", "ЦЗ", "ЦОП", "ФРВ"], "bank": 20, "probs": [50, 25, 25]}
+    return {"positions": ["ВРТ", "ЦЗ", "ЦОП", "ЦАП", "ФРВ"], "bank": 25, "probs": [70, 20, 10]}
 
 @app.route('/')
 def index():
@@ -92,8 +118,10 @@ def handle_login(data):
 @socketio.on('start_game')
 def handle_start_game(data):
     if data.get('player_index') != 0 or len(connected_players) < 3: return
-
-    game_state['theme'] = data['theme']
+    theme = data['theme']
+    rules = get_game_rules(theme)
+    
+    game_state['theme'] = theme
     game_state['active'] = True
     game_state['position_index'] = 0
     game_state['round'] = 1
@@ -102,7 +130,9 @@ def handle_start_game(data):
     game_state['lock'] = False
     game_state['waiting_for_decision'] = False
     for p in game_state['participants']:
-        p['bank'] = 25; p['squad'] = []; p['passed'] = False
+        p['bank'] = rules['bank']
+        p['squad'] = []
+        p['passed'] = False
     next_auction()
     emit_state()
 
@@ -118,10 +148,8 @@ def handle_bid(data):
     if game_state['lock'] or not game_state['active'] or game_state['waiting_for_decision']: return
     player = game_state['participants'][game_state['turn_index']]
     if not can_bid(player): return
-        
     amount = float(data['amount'])
     if amount > player['bank'] or amount <= game_state['current_price']: return
-        
     game_state['current_price'] = amount
     emit('log', {'text': f"{player['name']} ставит ${amount:.2f}"}, broadcast=True)
     game_state['lock'] = True
@@ -145,14 +173,12 @@ def handle_solo_decision(data):
     if not game_state['waiting_for_decision']: return
     winner = game_state['participants'][game_state['solo_winner_id']]
     take_it = data.get('take')
-    
     if take_it and winner['bank'] >= 1:
         winner['squad'].append({"name": game_state['current_player'], "price": 1, "cat": game_state['current_cat'], "pos": game_state['position']})
         winner['bank'] -= 1
         emit('log', {'text': f"🏆 {winner['name']} забрал {game_state['current_player']} за $1."}, broadcast=True)
     else:
         emit('log', {'text': f"🏁 {winner['name']} отказался от {game_state['current_player']}."}, broadcast=True)
-        
     game_state['waiting_for_decision'] = False
     game_state['round'] += 1
     game_state['lock'] = True
@@ -162,12 +188,10 @@ def handle_solo_decision(data):
 
 def next_turn():
     active_players = [p for p in game_state['participants'] if can_bid(p)]
-    
     if len(active_players) <= 1:
         winner_index = None
         for idx, p in enumerate(game_state['participants']):
             if can_bid(p): winner_index = idx; break
-                
         if winner_index is not None:
             if game_state['current_price'] == 0:
                 game_state['waiting_for_decision'] = True
@@ -182,7 +206,6 @@ def next_turn():
                 emit('log', {'text': f"🏆 {winner['name']} забирает {game_state['current_player']} за ${game_state['current_price']:.2f}"}, broadcast=True)
         else:
             emit('log', {'text': f"🏁 Никто не забрал {game_state['current_player']}."}, broadcast=True)
-            
         game_state['round'] += 1
         game_state['lock'] = True
         socketio.sleep(2)
@@ -195,44 +218,41 @@ def next_turn():
         emit_state()
 
 def advance_auction():
-    # Проверка: если никто больше не может покупать (все набрали по 5), только тогда конец
+    rules = get_game_rules(game_state['theme'])
+    positions = rules['positions']
     if not any(len(p['squad']) < 5 and p['bank'] >= 1 for p in game_state['participants']):
         game_state['active'] = False; emit('game_over', broadcast=True); return
-
     if game_state['round'] > 3:
         game_state['round'] = 1; game_state['position_index'] += 1
-        
-    if game_state['position_index'] >= len(POSITIONS):
+    if game_state['position_index'] >= len(positions):
         game_state['active'] = False; emit('game_over', broadcast=True); return
-        
     game_state['starting_turn'] = (game_state['starting_turn'] + 1) % 3
     next_auction()
 
 def next_auction():
-    game_state['position'] = POSITIONS[game_state['position_index']]
+    rules = get_game_rules(game_state['theme'])
+    positions = rules['positions']
+    probs = rules['probs']
+    game_state['position'] = positions[game_state['position_index']]
     game_state['current_price'] = 0
     game_state['waiting_for_decision'] = False
-    
     for p in game_state['participants']: p['passed'] = False
-        
-    # Ищем, кто может начать этот раунд
     attempts = 0
     while True:
         p = game_state['participants'][game_state['starting_turn']]
-        # Если у него есть деньги, места и он еще не купил вратаря на этой позиции
         if can_bid(p) or (game_state['position'] != "ВРТ" and p['bank'] >= 1 and len(p['squad']) < 5 and not p['passed']): 
             game_state['turn_index'] = game_state['starting_turn']
             break
         game_state['starting_turn'] = (game_state['starting_turn'] + 1) % 3
         attempts += 1
-        if attempts > 3: # Если все заняты, переходим к следующему аукциону
+        if attempts > 3:
             game_state['round'] += 1
             advance_auction()
             return
 
     rand = random.random() * 100
-    if rand < 70: cat = "топ"
-    elif rand < 90: cat = "средний"
+    if rand < probs[0]: cat = "топ"
+    elif rand < probs[0] + probs[1]: cat = "средний"
     else: cat = "слабый"
     
     pool = PLAYERS_POOL[game_state['theme']][game_state['position']][cat]
@@ -242,11 +262,14 @@ def next_auction():
         name = random.choice(available); game_state['used_players'].append(name); game_state['current_player'] = name; game_state['current_cat'] = cat
     else:
         all_pool = []
-        for c in ["топ", "средний", "слабый"]: all_pool.extend(PLAYERS_POOL[game_state['theme']][game_state['position']][c])
+        for c in ["топ", "средний", "слабый"]:
+            if game_state['position'] in PLAYERS_POOL[game_state['theme']]:
+                all_pool.extend(PLAYERS_POOL[game_state['theme']][game_state['position']].get(c, []))
         available = [p for p in all_pool if p not in game_state['used_players']]
-        if available: name = random.choice(available); game_state['used_players'].append(name); game_state['current_player'] = name; game_state['current_cat'] = "любая"
-        else: game_state['current_player'] = "Нет игроков"; game_state['current_cat'] = "нет"
-            
+        if available: 
+            name = random.choice(available); game_state['used_players'].append(name); game_state['current_player'] = name; game_state['current_cat'] = "любая"
+        else: 
+            game_state['current_player'] = "Нет игроков"; game_state['current_cat'] = "нет"
     emit_state()
 
 def emit_state():
