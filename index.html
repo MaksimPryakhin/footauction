@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FootAuction</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        :root { --bg: #121212; --card: #1e1e1e; --text: #e0e0e0; --accent: #4caf50; --danger: #f44336; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .container { width: 100%; max-width: 900px; }
+        .card { background: var(--card); border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        h1, h2, h3 { text-align: center; margin-top: 0; }
+        .btn { padding: 10px 20px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; font-weight: bold; margin: 5px;}
+        .btn-primary { background: #2196f3; color: white; }
+        .btn-success { background: var(--accent); color: white; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn:disabled { background: #555; cursor: not-allowed; opacity: 0.5; }
+        .players-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .player-card { background: #2a2a2a; padding: 15px; border-radius: 8px; text-align: center; border: 2px solid transparent; }
+        .player-card.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); }
+        .player-card.broke { opacity: 0.5; }
+        .player-name { font-size: 18px; font-weight: bold; }
+        .player-bank { color: var(--accent); font-size: 18px; margin: 5px 0;}
+        .player-squad { font-size: 12px; color: #aaa; text-align: left; }
+        .auction-box { text-align: center; padding: 20px; border: 2px dashed #444; border-radius: 12px; position: relative; }
+        .player-reveal { font-size: 32px; font-weight: bold; color: #ffeb3b; margin: 10px 0; }
+        .controls { display: flex; justify-content: center; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+        input[type="number"] { padding: 10px; font-size: 18px; border-radius: 8px; border: 1px solid #444; background: #333; color: white; width: 100px; text-align: center;}
+        .log { max-height: 150px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 14px;}
+        .hidden { display: none !important; }
+        .turn-banner { font-size: 20px; font-weight: bold; color: #ffeb3b; margin-bottom: 10px; text-transform: uppercase; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏆 FootAuction</h1>
+
+        <!-- Экран входа (выбор кто ты) -->
+        <div id="screen-login" class="card">
+            <h2>Кто ты?</h2>
+            <div class="controls">
+                <button class="btn btn-primary" onclick="login(0)">Макс</button>
+                <button class="btn btn-primary" onclick="login(1)">Пашок</button>
+                <button class="btn btn-primary" onclick="login(2)">Тимоха</button>
+            </div>
+        </div>
+
+        <!-- Экран старта (выбор темы) -->
+        <div id="screen-start" class="card hidden">
+            <h2>Выберите тематику</h2>
+            <div class="controls">
+                <button class="btn btn-primary" onclick="startGame('modern')">Современные</button>
+                <button class="btn btn-primary" onclick="startGame('xxi')">21 Век</button>
+                <button class="btn btn-primary" onclick="startGame('rpl')">РПЛ</button>
+                <button class="btn btn-primary" onclick="startGame('apl')">АПЛ</button>
+            </div>
+        </div>
+
+        <div id="screen-game" class="hidden">
+            <div class="card">
+                <div class="players-grid" id="players-container"></div>
+            </div>
+
+            <div class="card auction-box" id="auction-area">
+                <div class="turn-banner" id="turn-banner">Ход: ...</div>
+                <h3 id="pos-title">Позиция: ...</h3>
+                <div class="player-reveal" id="player-name">???</div>
+                <div style="font-size: 24px; margin: 10px 0;">Цена: <span id="current-price" style="color:#4caf50; font-weight:bold;">$1.00</span></div>
+                
+                <div class="controls" id="auction-controls">
+                    <input type="number" id="bid-input" placeholder="Сумма" min="1" step="1">
+                    <button class="btn btn-success" onclick="placeBid()" id="btn-bid">Поставить</button>
+                    <button class="btn btn-danger" onclick="passAuction()" id="btn-pass">Уступить</button>
+                </div>
+                <div id="waiting-text" class="hidden" style="color:#aaa; margin-top:10px;"></div>
+            </div>
+
+            <div class="card">
+                <h3>Лог</h3>
+                <div class="log" id="log-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let myPlayerIndex = -1; // Кто мы
+
+        socket.on('state_update', (state) => {
+            document.getElementById('screen-start').classList.add('hidden');
+            document.getElementById('screen-game').classList.remove('hidden');
+            render(state);
+        });
+
+        socket.on('log', (data) => {
+            const container = document.getElementById('log-container');
+            const div = document.createElement('div');
+            div.textContent = `> ${data.text}`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        });
+
+        socket.on('game_over', () => {
+            alert("Игра завершена!");
+        });
+
+        socket.on('error', (data) => {
+            alert(data.message);
+        });
+
+        function login(idx) {
+            myPlayerIndex = idx;
+            document.getElementById('screen-login').classList.add('hidden');
+            document.getElementById('screen-start').classList.remove('hidden');
+        }
+
+        function startGame(theme) {
+            socket.emit('start_game', { theme: theme });
+        }
+
+        function render(state) {
+            const pContainer = document.getElementById('players-container');
+            pContainer.innerHTML = '';
+            state.participants.forEach((p, idx) => {
+                const squadStr = Object.entries(p.squad).map(([pos, pl]) => `${pos}: ${pl.name}`).join('<br>') || '—';
+                const active = (idx === state.turn_index) ? 'active' : '';
+                const broke = (p.bank < 1) ? 'broke' : '';
+                pContainer.innerHTML += `
+                    <div class="player-card ${active} ${broke}">
+                        <div class="player-name">${p.name} ${idx === myPlayerIndex ? '(Вы)' : ''}</div>
+                        <div class="player-bank">$${p.bank.toFixed(2)}</div>
+                        <div class="player-squad">${squadStr}</div>
+                    </div>
+                `;
+            });
+
+            document.getElementById('pos-title').textContent = `Позиция: ${state.position} (Раунд ${state.round}/3)`;
+            document.getElementById('player-name').textContent = state.current_player;
+            document.getElementById('current-price').textContent = `$${state.current_price.toFixed(2)}`;
+            
+            const turnName = state.participants[state.turn_index].name;
+            document.getElementById('turn-banner').textContent = `Ход: ${turnName}`;
+
+            const isMyTurn = (state.turn_index === myPlayerIndex);
+            document.getElementById('btn-bid').disabled = !isMyTurn;
+            document.getElementById('btn-pass').disabled = !isMyTurn;
+            document.getElementById('bid-input').disabled = !isMyTurn;
+
+            if (!isMyTurn) {
+                document.getElementById('waiting-text').textContent = `Ожидание хода ${turnName}...`;
+                document.getElementById('waiting-text').classList.remove('hidden');
+            } else {
+                document.getElementById('waiting-text').classList.add('hidden');
+            }
+        }
+
+        function placeBid() {
+            const input = document.getElementById('bid-input');
+            const amount = parseFloat(input.value);
+            if (isNaN(amount)) return;
+            socket.emit('place_bid', { amount: amount });
+            input.value = '';
+        }
+
+        function passAuction() {
+            socket.emit('pass_auction');
+        }
+    </script>
+</body>
+</html>
