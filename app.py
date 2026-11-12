@@ -168,7 +168,8 @@ def next_turn():
         emit_state()
 
 def advance_auction():
-    if not any(can_bid(p) for p in game_state['participants']):
+    # Проверка: если никто больше не может покупать (все набрали по 5), только тогда конец
+    if not any(len(p['squad']) < 5 and p['bank'] >= 1 for p in game_state['participants']):
         game_state['active'] = False; emit('game_over', broadcast=True); return
 
     if game_state['round'] > 3:
@@ -187,11 +188,20 @@ def next_auction():
     
     for p in game_state['participants']: p['passed'] = False
         
+    # Ищем, кто может начать этот раунд
+    attempts = 0
     while True:
         p = game_state['participants'][game_state['starting_turn']]
-        if can_bid(p): game_state['turn_index'] = game_state['starting_turn']; break
+        # Если у него есть деньги, места и он еще не купил вратаря на этой позиции
+        if can_bid(p) or (game_state['position'] != "ВРТ" and p['bank'] >= 1 and len(p['squad']) < 5 and not p['passed']): 
+            game_state['turn_index'] = game_state['starting_turn']
+            break
         game_state['starting_turn'] = (game_state['starting_turn'] + 1) % 3
-        if game_state['starting_turn'] == game_state['turn_index']: return
+        attempts += 1
+        if attempts > 3: # Если все заняты, переходим к следующему аукциону
+            game_state['round'] += 1
+            advance_auction()
+            return
 
     rand = random.random() * 100
     if rand < 70: cat = "топ"
