@@ -6,8 +6,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# --- СОСТОЯНИЕ ---
-connected_players = set() # Кто зашел на сайт (0, 1, 2)
+connected_players = set()
 game_state = {
     "theme": "", "position": "ВРТ", "position_index": 0, "round": 1,
     "current_price": 1, "current_player": "", "current_cat": "", "used_players": [],
@@ -55,30 +54,19 @@ PLAYERS_POOL = {
 def index():
     return send_from_directory('.', 'index.html')
 
-@socketio.on('player_connected')
-def handle_connect():
-    pass
-
-@socketio.on('check_players')
-def handle_check():
-    # Здесь мы просто шлем broadcast всем, чтобы они обновили экран ожидания
-    is_ready = len(connected_players) == 3
-    emit('players_ready', is_ready, broadcast=True)
-
 @socketio.on('login')
 def handle_login(data):
-    # Добавляем игрока в список (0, 1 или 2)
-    connected_players.add(data['player_index'])
-    is_ready = len(connected_players) == 3
-    emit('players_ready', is_ready, broadcast=True)
+    idx = data.get('player_index')
+    if idx in [0, 1, 2]:
+        connected_players.add(idx)
+        is_ready = len(connected_players) == 3
+        emit('players_ready', is_ready, broadcast=True)
 
 @socketio.on('start_game')
 def handle_start_game(data):
-    # Защита на сервере: только Макс (0) может начать
     if data.get('player_index') != 0:
         emit('error', {'message': 'Только Максим может запускать игру!'})
         return
-        
     if len(connected_players) < 3:
         emit('error', {'message': 'Не все игроки подключились!'})
         return
