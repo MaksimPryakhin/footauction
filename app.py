@@ -6,6 +6,8 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# --- СОСТОЯНИЕ ---
+connected_players = set() # Кто зашел на сайт (0, 1, 2)
 game_state = {
     "theme": "", "position": "ВРТ", "position_index": 0, "round": 1,
     "current_price": 1, "current_player": "", "current_cat": "", "used_players": [],
@@ -53,8 +55,34 @@ PLAYERS_POOL = {
 def index():
     return send_from_directory('.', 'index.html')
 
+@socketio.on('player_connected')
+def handle_connect():
+    pass
+
+@socketio.on('check_players')
+def handle_check():
+    # Здесь мы просто шлем broadcast всем, чтобы они обновили экран ожидания
+    is_ready = len(connected_players) == 3
+    emit('players_ready', is_ready, broadcast=True)
+
+@socketio.on('login')
+def handle_login(data):
+    # Добавляем игрока в список (0, 1 или 2)
+    connected_players.add(data['player_index'])
+    is_ready = len(connected_players) == 3
+    emit('players_ready', is_ready, broadcast=True)
+
 @socketio.on('start_game')
 def handle_start_game(data):
+    # Защита на сервере: только Макс (0) может начать
+    if data.get('player_index') != 0:
+        emit('error', {'message': 'Только Максим может запускать игру!'})
+        return
+        
+    if len(connected_players) < 3:
+        emit('error', {'message': 'Не все игроки подключились!'})
+        return
+
     game_state['theme'] = data['theme']
     game_state['active'] = True
     game_state['position_index'] = 0
@@ -120,7 +148,6 @@ def next_auction():
     while game_state['participants'][game_state['turn_index']]['bank'] < 1:
         game_state['turn_index'] = (game_state['turn_index'] + 1) % 3
         
-    # Логика 70/20/10
     rand = random.random() * 100
     if rand < 70: cat = "топ"
     elif rand < 90: cat = "средний"
@@ -133,7 +160,6 @@ def next_auction():
         name = random.choice(available); game_state['used_players'].append(name); game_state['current_player'] = name
         game_state['current_cat'] = cat
     else:
-        # Если все кончились, берем из любой
         all_pool = []
         for c in ["топ", "средний", "слабый"]:
             all_pool.extend(PLAYERS_POOL[game_state['theme']][game_state['position']][c])
