@@ -9,14 +9,14 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 connected_players = set()
 game_state = {
     "theme": "", "position": "ВРТ", "position_index": 0, "round": 1,
-    "current_price": 1, "current_player": "", "current_cat": "", "used_players": [],
+    "current_price": 0, "current_player": "", "current_cat": "", "used_players": [],
     "participants": [
-        {"id": 1, "name": "Макс", "bank": 25, "squad": {}, "passed": False},
-        {"id": 2, "name": "Пашок", "bank": 25, "squad": {}, "passed": False},
-        {"id": 3, "name": "Тимоха", "bank": 25, "squad": {}, "passed": False}
+        {"id": 1, "name": "Макс", "bank": 25, "squad": [], "passed": False},
+        {"id": 2, "name": "Пашок", "bank": 25, "squad": [], "passed": False},
+        {"id": 3, "name": "Тимоха", "bank": 25, "squad": [], "passed": False}
     ],
     "turn_index": 0, "starting_turn": 0, "active": False,
-    "lock": False # ЗАЩИТА ОТ ДВОЙНЫХ НАЖАТИЙ
+    "lock": False, "waiting_for_decision": False, "solo_winner_id": None
 }
 POSITIONS = ["ВРТ", "ЦЗ", "ЦОП", "ЦАП", "ФРВ"]
 
@@ -60,15 +60,11 @@ def handle_login(data):
     idx = data.get('player_index')
     if idx in [0, 1, 2]:
         connected_players.add(idx)
-        is_ready = len(connected_players) == 3
-        emit('players_ready', is_ready, broadcast=True)
+        emit('players_ready', len(connected_players) == 3, broadcast=True)
 
 @socketio.on('start_game')
 def handle_start_game(data):
-    if data.get('player_index') != 0:
-        emit('error', {'message': 'Только Максим может запускать игру!'}); return
-    if len(connected_players) < 3:
-        emit('error', {'message': 'Не все игроки подключились!'}); return
+    if data.get('player_index') != 0 or len(connected_players) < 3: return
 
     game_state['theme'] = data['theme']
     game_state['active'] = True
@@ -77,29 +73,32 @@ def handle_start_game(data):
     game_state['used_players'] = []
     game_state['starting_turn'] = 0
     game_state['lock'] = False
+    game_state['waiting_for_decision'] = False
     for p in game_state['participants']:
-        p['bank'] = 25; p['squad'] = {}; p['passed'] = False
+        p['bank'] = 25; p['squad'] = []; p['passed'] = False
     next_auction()
     emit_state()
 
+def can_bid(player):
+    # Не может, если уступил, банк < 1, или уже 5 игроков
+    if player['passed'] or player['bank'] < 1 or len(player['squad']) >= 5: return False
+    # Если разыгрывается ВРТ и у него уже есть ВРТ, он не может ставить
+    if game_state['position'] == "ВРТ":
+        has_gk = any(p['pos'] == "ВРТ" for p in player['squad'])
+        if has_gk: return False
+    return True
+
 @socketio.on('place_bid')
 def handle_bid(data):
-    if game_state['lock'] or not game_state['active']: return
-    
-    amount = float(data['amount'])
+    if game_state['lock'] or not game_state['active'] or game_state['waiting_for_decision']: return
     player = game_state['participants'][game_state['turn_index']]
-    
-    # Проверка, что игрок еще может торговаться
-    if len(player['squad']) >= 5 or player['passed'] or player['bank'] < 1:
-        emit('error', {'message': 'Вы не можете делать ставку!'}); return
+    if not can_bid(player): return
         
-    if amount > player['bank'] or amount <= game_state['current_price']:
-        emit('error', {'message': 'Неверная ставка!'}); return
+    amount = float(data['amount'])
+    if amount > player['bank'] or amount <= game_state['current_price']: return
         
     game_state['current_price'] = amount
     emit('log', {'text': f"{player['name']} ставит ${amount:.2f}"}, broadcast=True)
-    
-    # Блокируем на мгновение, чтобы избежать двойных кликов
     game_state['lock'] = True
     socketio.sleep(0.5)
     game_state['lock'] = False
@@ -107,63 +106,73 @@ def handle_bid(data):
 
 @socketio.on('pass_auction')
 def handle_pass():
-    if game_state['lock'] or not game_state['active']: return
-    
+    if game_state['lock'] or not game_state['active'] or game_state['waiting_for_decision']: return
     player = game_state['participants'][game_state['turn_index']]
     player['passed'] = True
     emit('log', {'text': f"❌ {player['name']} уступает."}, broadcast=True)
-    
     game_state['lock'] = True
     socketio.sleep(0.5)
     game_state['lock'] = False
     next_turn()
 
-def next_turn():
-    # Собираем тех, кто может участвовать (банк > 0, есть место в составе, не уступил)
-    active_players = [
-        p for p in game_state['participants'] 
-        if not p['passed'] and p['bank'] >= 1 and len(p['squad']) < 5
-    ]
+@socketio.on('solo_decision')
+def handle_solo_decision(data):
+    if not game_state['waiting_for_decision']: return
+    winner = game_state['participants'][game_state['solo_winner_id']]
+    take_it = data.get('take')
     
-    # Если остался один или ноль игроков — аукцион завершается
-    if len(active_players) <= 1:
-        winner = active_players[0] if active_players else None
+    if take_it and winner['bank'] >= 1:
+        winner['squad'].append({"name": game_state['current_player'], "price": 1, "cat": game_state['current_cat'], "pos": game_state['position']})
+        winner['bank'] -= 1
+        emit('log', {'text': f"🏆 {winner['name']} забрал {game_state['current_player']} за $1."}, broadcast=True)
+    else:
+        emit('log', {'text': f"🏁 {winner['name']} отказался от {game_state['current_player']}."}, broadcast=True)
         
-        if winner:
-            # Забирает игрока за текущую цену
-            winner['squad'][game_state['position']] = {
-                "name": game_state['current_player'], 
-                "price": game_state['current_price'],
-                "cat": game_state['current_cat']
-            }
-            winner['bank'] -= game_state['current_price']
-            emit('log', {'text': f"🏆 {game_state['current_player']} ушел к {winner['name']} за ${game_state['current_price']:.2f}"}, broadcast=True)
+    game_state['waiting_for_decision'] = False
+    game_state['round'] += 1
+    game_state['lock'] = True
+    socketio.sleep(2)
+    game_state['lock'] = False
+    advance_auction()
+
+def next_turn():
+    active_players = [p for p in game_state['participants'] if can_bid(p)]
+    
+    if len(active_players) <= 1:
+        winner_index = None
+        for idx, p in enumerate(game_state['participants']):
+            if can_bid(p): winner_index = idx; break
+                
+        if winner_index is not None:
+            if game_state['current_price'] == 0:
+                game_state['waiting_for_decision'] = True
+                game_state['solo_winner_id'] = winner_index
+                emit('log', {'text': f"🤔 {game_state['participants'][winner_index]['name']}, будете брать за $1?"}, broadcast=True)
+                emit_state()
+                return
+            else:
+                winner = game_state['participants'][winner_index]
+                winner['squad'].append({"name": game_state['current_player'], "price": game_state['current_price'], "cat": game_state['current_cat'], "pos": game_state['position']})
+                winner['bank'] -= game_state['current_price']
+                emit('log', {'text': f"🏆 {winner['name']} забирает {game_state['current_player']} за ${game_state['current_price']:.2f}"}, broadcast=True)
         else:
             emit('log', {'text': f"🏁 Никто не забрал {game_state['current_player']}."}, broadcast=True)
             
         game_state['round'] += 1
-        
-        # Блокируем игру на время анимации
         game_state['lock'] = True
-        socketio.sleep(3)
+        socketio.sleep(2)
         game_state['lock'] = False
         advance_auction()
     else:
-        # Передаем ход следующему доступному игроку
         while True:
             game_state['turn_index'] = (game_state['turn_index'] + 1) % 3
-            p = game_state['participants'][game_state['turn_index']]
-            if not p['passed'] and p['bank'] >= 1 and len(p['squad']) < 5:
-                break
+            if can_bid(game_state['participants'][game_state['turn_index']]): break
         emit_state()
 
 def advance_auction():
-    # Проверка, не закончилась ли игра из-за лимита игроков
-    players_with_space = [p for p in game_state['participants'] if len(p['squad']) < 5]
-    if not players_with_space:
-        game_state['active'] = False
-        emit('game_over', broadcast=True)
-        return
+    # Если больше никто не может покупать (у всех 5), игра завершается
+    if not any(can_bid(p) for p in game_state['participants']):
+        game_state['active'] = False; emit('game_over', broadcast=True); return
 
     if game_state['round'] > 3:
         game_state['round'] = 1; game_state['position_index'] += 1
@@ -175,29 +184,18 @@ def advance_auction():
     next_auction()
 
 def next_auction():
-    if not game_state['active']: return
-    
     game_state['position'] = POSITIONS[game_state['position_index']]
-    game_state['current_price'] = 1
+    game_state['current_price'] = 0
+    game_state['waiting_for_decision'] = False
     
-    # Сбрасываем статус "уступил" у всех
-    for p in game_state['participants']:
-        p['passed'] = False
+    for p in game_state['participants']: p['passed'] = False
         
-    # Ищем, кто начинает ход. Если у него полный состав или нет денег, передаем дальше.
     while True:
         p = game_state['participants'][game_state['starting_turn']]
-        if p['bank'] >= 1 and len(p['squad']) < 5:
-            game_state['turn_index'] = game_state['starting_turn']
-            break
+        if can_bid(p): game_state['turn_index'] = game_state['starting_turn']; break
         game_state['starting_turn'] = (game_state['starting_turn'] + 1) % 3
-        # Если мы прошли полный круг и нет никого, кто может играть
-        if game_state['starting_turn'] == game_state['turn_index']:
-            game_state['active'] = False
-            emit('game_over', broadcast=True)
-            return
+        if game_state['starting_turn'] == game_state['turn_index']: return
 
-    # Выбор футболиста (70/20/10)
     rand = random.random() * 100
     if rand < 70: cat = "топ"
     elif rand < 90: cat = "средний"
@@ -207,37 +205,23 @@ def next_auction():
     available = [p for p in pool if p not in game_state['used_players']]
     
     if available:
-        name = random.choice(available)
-        game_state['used_players'].append(name)
-        game_state['current_player'] = name
-        game_state['current_cat'] = cat
+        name = random.choice(available); game_state['used_players'].append(name); game_state['current_player'] = name; game_state['current_cat'] = cat
     else:
-        # Если в категории кончились, ищем в других
         all_pool = []
-        for c in ["топ", "средний", "слабый"]:
-            all_pool.extend(PLAYERS_POOL[game_state['theme']][game_state['position']][c])
+        for c in ["топ", "средний", "слабый"]: all_pool.extend(PLAYERS_POOL[game_state['theme']][game_state['position']][c])
         available = [p for p in all_pool if p not in game_state['used_players']]
-        if available:
-            name = random.choice(available)
-            game_state['used_players'].append(name)
-            game_state['current_player'] = name
-            game_state['current_cat'] = "любая"
-        else:
-            game_state['current_player'] = "Нет игроков"
-            game_state['current_cat'] = "нет"
+        if available: name = random.choice(available); game_state['used_players'].append(name); game_state['current_player'] = name; game_state['current_cat'] = "любая"
+        else: game_state['current_player'] = "Нет игроков"; game_state['current_cat'] = "нет"
             
     emit_state()
 
 def emit_state():
     socketio.emit('state_update', {
-        'participants': game_state['participants'], 
-        'position': game_state['position'],
-        'round': game_state['round'], 
-        'current_price': game_state['current_price'],
-        'current_player': game_state['current_player'], 
-        'current_cat': game_state['current_cat'],
-        'turn_index': game_state['turn_index'], 
-        'active': game_state['active']
+        'participants': game_state['participants'], 'position': game_state['position'],
+        'round': game_state['round'], 'current_price': game_state['current_price'],
+        'current_player': game_state['current_player'], 'current_cat': game_state['current_cat'],
+        'turn_index': game_state['turn_index'], 'active': game_state['active'],
+        'waiting_for_decision': game_state['waiting_for_decision'], 'solo_winner_id': game_state['solo_winner_id']
     })
 
 if __name__ == '__main__':
