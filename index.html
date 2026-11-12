@@ -15,6 +15,7 @@
         .btn-primary { background: #2196f3; color: white; }
         .btn-success { background: var(--accent); color: white; }
         .btn-danger { background: var(--danger); color: white; }
+        .btn-warning { background: #ff9800; color: white; }
         .btn:disabled { background: #555; cursor: not-allowed; opacity: 0.5; }
         .players-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
         .player-card { background: #2a2a2a; padding: 15px; border-radius: 8px; text-align: center; border: 2px solid transparent; }
@@ -36,7 +37,6 @@
     <div class="container">
         <h1>🏆 FootAuction</h1>
 
-        <!-- Экран входа -->
         <div id="screen-login" class="card">
             <h2>Кто ты?</h2>
             <div class="controls">
@@ -46,7 +46,6 @@
             </div>
         </div>
 
-        <!-- Экран старта -->
         <div id="screen-start" class="card hidden">
             <h2>Выберите тематику (только Максим)</h2>
             <div class="controls" id="theme-buttons">
@@ -58,7 +57,6 @@
             <p id="waiting-start" style="color:#ffeb3b; margin-top: 20px; font-weight: bold; text-align:center;">Ожидание подключения всех игроков...</p>
         </div>
 
-        <!-- Экран игры -->
         <div id="screen-game" class="hidden">
             <div class="card">
                 <div class="players-grid" id="players-container"></div>
@@ -69,13 +67,19 @@
                 <h3 id="pos-title">Позиция: ...</h3>
                 <div class="player-reveal" id="player-name">???</div>
                 <div id="player-cat" style="color:#aaa; margin-bottom:10px;">...</div>
-                <div style="font-size: 24px; margin: 10px 0;">Цена: <span id="current-price" style="color:#4caf50; font-weight:bold;">$1.00</span></div>
+                <div style="font-size: 24px; margin: 10px 0;">Цена: <span id="current-price" style="color:#4caf50; font-weight:bold;">$0.00</span></div>
                 
                 <div class="controls" id="auction-controls">
                     <input type="number" id="bid-input" placeholder="Сумма" min="1" step="1">
                     <button class="btn btn-success" onclick="placeBid()" id="btn-bid">Поставить</button>
                     <button class="btn btn-danger" onclick="passAuction()" id="btn-pass">Уступить</button>
                 </div>
+
+                <div class="controls hidden" id="decision-controls">
+                    <button class="btn btn-warning" onclick="soloDecision(true)" id="btn-take">Взять за $1</button>
+                    <button class="btn btn-danger" onclick="soloDecision(false)" id="btn-skip">Отказаться</button>
+                </div>
+
                 <div id="waiting-text" class="hidden" style="color:#aaa; margin-top:10px; text-align:center;"></div>
             </div>
 
@@ -92,9 +96,7 @@
 
         socket.on('players_ready', (isReady) => {
             if (myPlayerIndex === -1) return;
-            
             if (isReady) {
-                // Все трое зашли
                 if (myPlayerIndex === 0) {
                     document.getElementById('theme-buttons').classList.remove('hidden');
                     document.getElementById('waiting-start').classList.add('hidden');
@@ -104,7 +106,6 @@
                     document.getElementById('waiting-start').textContent = "Все в сборе! Ждем, пока Максим выберет тему...";
                 }
             } else {
-                // Не все зашли
                 document.getElementById('theme-buttons').classList.add('hidden');
                 document.getElementById('waiting-start').classList.remove('hidden');
                 document.getElementById('waiting-start').textContent = "Ожидание подключения всех игроков...";
@@ -132,14 +133,11 @@
             myPlayerIndex = idx;
             document.getElementById('screen-login').classList.add('hidden');
             document.getElementById('screen-start').classList.remove('hidden');
-            
-            // Сообщаем серверу, кто мы
             socket.emit('login', { player_index: idx });
         }
 
         function startGame(theme) {
             if (myPlayerIndex !== 0) return;
-            // Передаем индекс, чтобы сервер знал, что запрос от Макса
             socket.emit('start_game', { theme: theme, player_index: myPlayerIndex });
         }
 
@@ -147,14 +145,15 @@
             const pContainer = document.getElementById('players-container');
             pContainer.innerHTML = '';
             state.participants.forEach((p, idx) => {
-                const squadStr = Object.entries(p.squad).map(([pos, pl]) => `${pos}: ${pl.name}`).join('<br>') || '—';
-                const active = (idx === state.turn_index) ? 'active' : '';
+                // ВОТ ЗДЕСЬ МЫ ТЕПЕРЬ ПЕРЕБИРАЕМ МАССИВ, А НЕ ОБЪЕКТ
+                const squadStr = p.squad.map(pl => `${pl.pos}: ${pl.name}`).join('<br>') || '—';
+                const active = (idx === state.turn_index && !state.waiting_for_decision) ? 'active' : '';
                 const broke = (p.bank < 1) ? 'broke' : '';
                 pContainer.innerHTML += `
                     <div class="player-card ${active} ${broke}">
                         <div class="player-name">${p.name} ${idx === myPlayerIndex ? '(Вы)' : ''}</div>
                         <div class="player-bank">$${p.bank.toFixed(2)}</div>
-                        <div class="player-squad">${squadStr}</div>
+                        <div class="player-squad">${squadStr} <br><small>(${p.squad.length}/5)</small></div>
                     </div>
                 `;
             });
@@ -164,19 +163,41 @@
             document.getElementById('player-cat').textContent = `Категория: ${state.current_cat}`;
             document.getElementById('current-price').textContent = `$${state.current_price.toFixed(2)}`;
             
-            const turnName = state.participants[state.turn_index].name;
-            document.getElementById('turn-banner').textContent = `Ход: ${turnName}`;
+            const auctionControls = document.getElementById('auction-controls');
+            const decisionControls = document.getElementById('decision-controls');
+            const turnBanner = document.getElementById('turn-banner');
+            const waitingText = document.getElementById('waiting-text');
 
-            const isMyTurn = (state.turn_index === myPlayerIndex);
-            document.getElementById('btn-bid').disabled = !isMyTurn;
-            document.getElementById('btn-pass').disabled = !isMyTurn;
-            document.getElementById('bid-input').disabled = !isMyTurn;
-
-            if (!isMyTurn) {
-                document.getElementById('waiting-text').textContent = `Ожидание хода ${turnName}...`;
-                document.getElementById('waiting-text').classList.remove('hidden');
+            if (state.waiting_for_decision) {
+                auctionControls.classList.add('hidden');
+                turnBanner.textContent = `Решение за ${state.participants[state.solo_winner_id].name}`;
+                
+                if (state.solo_winner_id === myPlayerIndex) {
+                    decisionControls.classList.remove('hidden');
+                    waitingText.classList.add('hidden');
+                } else {
+                    decisionControls.classList.add('hidden');
+                    waitingText.classList.remove('hidden');
+                    waitingText.textContent = "Ожидание решения...";
+                }
             } else {
-                document.getElementById('waiting-text').classList.add('hidden');
+                decisionControls.classList.add('hidden');
+                auctionControls.classList.remove('hidden');
+                
+                const turnName = state.participants[state.turn_index].name;
+                turnBanner.textContent = `Ход: ${turnName}`;
+                
+                const isMyTurn = (state.turn_index === myPlayerIndex);
+                document.getElementById('btn-bid').disabled = !isMyTurn;
+                document.getElementById('btn-pass').disabled = !isMyTurn;
+                document.getElementById('bid-input').disabled = !isMyTurn;
+
+                if (!isMyTurn) {
+                    waitingText.textContent = `Ожидание хода ${turnName}...`;
+                    waitingText.classList.remove('hidden');
+                } else {
+                    waitingText.classList.add('hidden');
+                }
             }
         }
 
@@ -190,6 +211,10 @@
 
         function passAuction() {
             socket.emit('pass_auction');
+        }
+
+        function soloDecision(take) {
+            socket.emit('solo_decision', { player_index: myPlayerIndex, take: take });
         }
     </script>
 </body>
