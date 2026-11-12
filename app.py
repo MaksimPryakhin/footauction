@@ -80,9 +80,7 @@ def handle_start_game(data):
     emit_state()
 
 def can_bid(player):
-    # Не может, если уступил, банк < 1, или уже 5 игроков
     if player['passed'] or player['bank'] < 1 or len(player['squad']) >= 5: return False
-    # Если разыгрывается ВРТ и у него уже есть ВРТ, он не может ставить
     if game_state['position'] == "ВРТ":
         has_gk = any(p['pos'] == "ВРТ" for p in player['squad'])
         if has_gk: return False
@@ -170,7 +168,6 @@ def next_turn():
         emit_state()
 
 def advance_auction():
-    # Если больше никто не может покупать (у всех 5), игра завершается
     if not any(can_bid(p) for p in game_state['participants']):
         game_state['active'] = False; emit('game_over', broadcast=True); return
 
