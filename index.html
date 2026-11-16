@@ -162,7 +162,6 @@
 
         socket.on('connect', () => console.log('socket connected', socket.id));
         socket.on('players_ready', (isReady) => {
-            console.log('players_ready', isReady);
             if (myPlayerIndex === -1) return;
             if (isReady) {
                 if (myPlayerIndex === 0) {
@@ -233,7 +232,7 @@
         }
 
         function slotMatches(playerPos, playerAlt, slotPos) {
-            const map = { "ЛВ": "ЛП", "ПВ": "ПП" };
+            const map = { "ЛВ": "ЛП", "ПВ": "ПП", "ЛП": "ЛВ", "ПП": "ПВ" };
             const sp = map[slotPos] || slotPos;
             const pp = map[playerPos] || playerPos;
             if (pp === sp) return true;
@@ -248,8 +247,9 @@
             const occupied = new Set(st.starters.map(s => s.slot_index));
             for (let i = 0; i < st.scheme_view.length; i++) {
                 if (occupied.has(i)) continue;
-                if (slotMatches(player.pos, player.alt, st.scheme_view[i].pos)) return true;
+                return true; // любой свободный слот теперь доступен (с off_position)
             }
+            // если все слоты заняты — проверяем перестановки
             for (const s of st.starters) {
                 if (!slotMatches(player.pos, player.alt, st.scheme_view[s.slot_index].pos)) continue;
                 for (let i = 0; i < st.scheme_view.length; i++) {
@@ -257,7 +257,6 @@
                     if (slotMatches(s.pos, s.alt, st.scheme_view[i].pos)) return true;
                 }
             }
-            if (st.starters.length === 10) return true;
             return false;
         }
 
@@ -286,7 +285,6 @@
                 return `<div class="${cls} draggable" ${dragAttr}>${content}</div>`;
             }).join('');
 
-            // drag-and-drop
             list.querySelectorAll('[data-slot]').forEach(el => {
                 el.addEventListener('dragstart', (e) => {
                     if (!el.classList.contains('filled') && !el.classList.contains('offpos')) {
@@ -315,22 +313,38 @@
             const trio = document.getElementById('draft-trio');
             trio.innerHTML = '';
             const isMyTurn = (st.current_player_index === myPlayerIndex) && !st.sub_phase && !st.confirm_phase && !st.pending_choice;
+
+            const checkDisabled = (p) => {
+                if (!isMyTurn) return true;
+                if (p.type === 'coach' && st.coach) return true;
+                if (p.type === 'coach' && st.starters.some(s => s.name === p.name)) return true;
+                if (p.type === 'player' && st.coach === p.name) return true;
+                if (p.type === 'player' && !hasAnyOption(st, p)) return true;
+                return false;
+            };
+
             st.trio.forEach((p, i) => {
                 const b = document.createElement('button');
                 b.className = 'btn btn-success';
                 b.textContent = `${p.name} (${p.pos}${p.alt && p.alt.length ? '/' + p.alt.join('/') : ''})`;
-                let disabled = !isMyTurn;
-                if (p.type === 'coach' && st.coach) {
-                    disabled = true;
-                    b.textContent += ' [тренер уже есть]';
-                } else if (p.type === 'player' && !hasAnyOption(st, p)) {
-                    disabled = true;
-                    b.textContent += ' [нет места]';
-                }
+                const disabled = checkDisabled(p);
+                if (p.type === 'coach' && st.coach) b.textContent += ' [тренер уже есть]';
+                else if (p.type === 'coach' && st.starters.some(s => s.name === p.name)) b.textContent += ' [уже в старте]';
+                else if (p.type === 'player' && st.coach === p.name) b.textContent += ' [Зидан уже тренер]';
+                else if (p.type === 'player' && !hasAnyOption(st, p)) b.textContent += ' [нет места]';
                 b.disabled = disabled;
                 b.onclick = () => socket.emit('draft_pick', {player_index: myPlayerIndex, index: i});
                 trio.appendChild(b);
             });
+
+            // если все три недоступны — показать «Пропустить тройку»
+            if (st.trio.length > 0 && st.trio.every(p => checkDisabled(p)) && isMyTurn) {
+                const skip = document.createElement('button');
+                skip.className = 'btn btn-warning';
+                skip.textContent = 'Пропустить тройку';
+                skip.onclick = () => socket.emit('draft_skip_trio', {player_index: myPlayerIndex});
+                trio.appendChild(skip);
+            }
 
             const choiceArea = document.getElementById('draft-choice-area');
             choiceArea.innerHTML = '';
