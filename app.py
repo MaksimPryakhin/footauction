@@ -237,32 +237,22 @@ def build_options(st, chosen):
     occupied = {s["slot_index"]: s for s in st["starters"]}
     free_slots = [i for i in range(len(scheme)) if i not in occupied]
     options = []
-
-    # любой свободный слот: родной — обычный, неродной — «не по позиции»
     for i in free_slots:
         can = player_can_play(chosen["pos"], chosen["alt"], scheme[i])
         options.append({
-            "type": "place",
-            "slot_index": i,
-            "slot_pos": scheme[i],
-            "moves": [],
-            "off_position": not can
+            "type": "place", "slot_index": i, "slot_pos": scheme[i],
+            "moves": [], "off_position": not can
         })
-
-    # перестановки: только валидные (оба игрока могут на новые позиции)
     for occ_idx, occ in occupied.items():
         if not player_can_play(chosen["pos"], chosen["alt"], scheme[occ_idx]):
             continue
         for free_idx in free_slots:
             if player_can_play(occ["pos"], occ.get("alt", []), scheme[free_idx]):
                 options.append({
-                    "type": "swap",
-                    "slot_index": occ_idx,
-                    "slot_pos": scheme[occ_idx],
+                    "type": "swap", "slot_index": occ_idx, "slot_pos": scheme[occ_idx],
                     "moves": [{"from_slot": occ_idx, "to_slot": free_idx,
                                "player": occ["name"], "to_pos": scheme[free_idx]}],
                 })
-
     return options
 
 
@@ -294,35 +284,47 @@ def draft_emit():
 
 def draft_next_trio():
     st = DRAFT_STATE
+    # 11 игроков + тренер — переход к заменам
     if len(st["starters"]) >= 11 and st["coach"] is not None:
         st["sub_phase"] = True
         st["sub_index"] = 0
         st["trio"] = []
         return
-    if len(st["pool"]) < 3:
-        # элементов не хватает — переходим к заменам/подтверждению
-        st["trio"] = []
-        if len(st["starters"]) >= 11 and st["coach"] is not None:
+
+    # 12-й пик: 11 игроков, тренера нет — обязательно минимум 1 тренер
+    if len(st["starters"]) >= 11 and st["coach"] is None:
+        coaches = [p for p in st["pool"] if p["type"] == "coach"]
+        if not coaches:
             st["sub_phase"] = True
             st["sub_index"] = 0
-        else:
-            st["confirm_phase"] = True
+            st["trio"] = []
+            return
+        chosen_coach = random.choice(coaches)
+        rest_pool = [p for p in st["pool"] if p is not chosen_coach]
+        extra = random.sample(rest_pool, min(2, len(rest_pool)))
+        st["trio"] = [chosen_coach] + extra
         return
-    st["trio"] = random.sample(st["pool"], 3)
 
-@socketio.on('draft_skip_trio')
-def handle_draft_skip_trio(data):
-    st = DRAFT_STATE
-    if not st["active"] or st["sub_phase"] or st["confirm_phase"] or st["pending_choice"]:
+    # пики 1–11
+    if len(st["pool"]) < 3:
+        st["trio"] = []
+        st["confirm_phase"] = True
         return
-    if data.get('player_index') != st["current_player_index"]:
+
+    players = [p for p in st["pool"] if p["type"] == "player"]
+    coaches = [p for p in st["pool"] if p["type"] == "coach"]
+
+    # придерживаем последнего тренера, если он ещё не выбран
+    coaches_available = coaches
+    if st["coach"] is None and len(coaches) == 1:
+        coaches_available = []
+
+    candidates = players + coaches_available
+    if len(candidates) < 3:
+        st["trio"] = candidates
         return
-    if not st["trio"]:
-        return
-    st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
-    st["trio"] = []
-    draft_next_trio()
-    draft_emit()
+    st["trio"] = random.sample(candidates, 3)
+
 
 @socketio.on('draft_start')
 def handle_draft_start(data):
@@ -332,20 +334,11 @@ def handle_draft_start(data):
     club_name = data.get('club', 'Реал')
     club = CLUBS[club_name]
     DRAFT_STATE.update({
-        "active": True,
-        "club": club_name,
-        "scheme": scheme,
-        "starters": [],
-        "coach": None,
-        "trio": [],
-        "current_player_index": 0,
-        "results": {},
-        "sub_phase": False,
-        "sub_index": 0,
-        "sub_used": None,
-        "sub_decision_pending": False,
-        "confirm_phase": False,
-        "pending_choice": None,
+        "active": True, "club": club_name, "scheme": scheme,
+        "starters": [], "coach": None, "trio": [],
+        "current_player_index": 0, "results": {},
+        "sub_phase": False, "sub_index": 0, "sub_used": None,
+        "sub_decision_pending": False, "confirm_phase": False, "pending_choice": None,
     })
     pool = draft_build_pool(club)
     subs = random.sample(pool, 8)
@@ -369,7 +362,11 @@ def handle_draft_pick(data):
         return
     chosen = st["trio"][idx]
 
-    # Зидан: если уже выбран тренером — игрока нельзя
+    # 12-й пик: только тренер
+    if len(st["starters"]) >= 11 and st["coach"] is None and chosen["type"] != "coach":
+        return
+
+    # Зидан: если уже тренером — игрока нельзя
     if chosen["type"] == "player" and st["coach"] == chosen["name"]:
         return
     # Зидан: если уже в старте — тренера нельзя
@@ -445,7 +442,6 @@ def handle_draft_move(data):
         return
     if from_slot == to_slot:
         return
-    # найти игрока на from_slot
     from_player = None
     to_player = None
     for s in st["starters"]:
@@ -455,17 +451,30 @@ def handle_draft_move(data):
             to_player = s
     if from_player is None:
         return
-    # проверить, может ли from_player играть на to_slot
-    if not player_can_play(from_player["pos"], from_player.get("alt", []), scheme[to_slot]):
-        return
-    # если на to_slot кто-то есть — проверить, может ли он на from_slot
+    # без проверки позиции
     if to_player is not None:
-        if not player_can_play(to_player["pos"], to_player.get("alt", []), scheme[from_slot]):
-            return
         to_player["slot_index"] = from_slot
         to_player["off_position"] = not player_can_play(to_player["pos"], to_player.get("alt", []), scheme[from_slot])
     from_player["slot_index"] = to_slot
     from_player["off_position"] = not player_can_play(from_player["pos"], from_player.get("alt", []), scheme[to_slot])
+    draft_emit()
+
+
+@socketio.on('draft_skip_trio')
+def handle_draft_skip_trio(data):
+    st = DRAFT_STATE
+    if not st["active"] or st["sub_phase"] or st["confirm_phase"] or st["pending_choice"]:
+        return
+    if data.get('player_index') != st["current_player_index"]:
+        return
+    if not st["trio"]:
+        return
+    # на 12-м пике пропуск запрещён
+    if len(st["starters"]) >= 11 and st["coach"] is None:
+        return
+    st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
+    st["trio"] = []
+    draft_next_trio()
     draft_emit()
 
 
