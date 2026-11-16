@@ -31,6 +31,7 @@
         .log { max-height: 150px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 14px;}
         .hidden { display: none !important; }
         .turn-banner { font-size: 20px; font-weight: bold; color: #ffeb3b; margin-bottom: 10px; text-transform: uppercase; }
+        .draft-list { text-align: left; color: #ccc; font-size: 14px; }
     </style>
 </head>
 <body>
@@ -43,6 +44,14 @@
                 <button class="btn btn-primary" onclick="login(0)">Макс</button>
                 <button class="btn btn-primary" onclick="login(1)">Пашок</button>
                 <button class="btn btn-primary" onclick="login(2)">Тимоха</button>
+            </div>
+        </div>
+
+        <div id="screen-choose-game" class="card hidden">
+            <h2>Выберите игру (только Максим)</h2>
+            <div class="controls">
+                <button class="btn btn-primary" onclick="chooseGame('auction')">Аукцион</button>
+                <button class="btn btn-success" onclick="chooseGame('draft')">Символическая сборная</button>
             </div>
         </div>
 
@@ -70,7 +79,7 @@
                 <div class="player-reveal" id="player-name">???</div>
                 <div id="player-cat" style="color:#aaa; margin-bottom:10px;">...</div>
                 <div style="font-size: 24px; margin: 10px 0;">Цена: <span id="current-price" style="color:#4caf50; font-weight:bold;">$0.00</span></div>
-                
+
                 <div class="controls" id="auction-controls">
                     <input type="number" id="bid-input" placeholder="Сумма" min="1" step="1">
                     <button class="btn btn-success" onclick="placeBid()" id="btn-bid">Поставить</button>
@@ -90,32 +99,52 @@
                 <div class="log" id="log-container"></div>
             </div>
         </div>
+
+        <div id="screen-draft" class="hidden">
+            <div class="card">
+                <h2>Символическая сборная — <span id="draft-club">Реал</span></h2>
+                <div id="draft-setup">
+                    <p style="text-align:center;">Схема (выбирает Максим):</p>
+                    <div class="controls" id="scheme-buttons">
+                        <button class="btn btn-primary" onclick="startDraft('4-4-2')">4-4-2</button>
+                        <button class="btn btn-primary" onclick="startDraft('4-3-3')">4-3-3</button>
+                        <button class="btn btn-primary" onclick="startDraft('4-2-3-1')">4-2-3-1</button>
+                    </div>
+                    <p id="draft-waiting" class="hidden" style="color:#ffeb3b; text-align:center; font-weight:bold;">Ждем, пока Максим выберет схему...</p>
+                </div>
+                <div id="draft-game" class="hidden">
+                    <p id="draft-status" class="turn-banner"></p>
+                    <p style="text-align:center;">Старт: <span id="draft-starters-count">0</span>/11 · Тренер: <span id="draft-coach">—</span></p>
+                    <div class="controls" id="draft-trio"></div>
+                    <div id="draft-sub-area" class="hidden" style="text-align:center;"></div>
+                    <div id="draft-results" class="hidden"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
         const socket = io();
         let myPlayerIndex = -1;
+        let currentGame = null;
 
         socket.on('players_ready', (isReady) => {
             if (myPlayerIndex === -1) return;
             if (isReady) {
                 if (myPlayerIndex === 0) {
-                    document.getElementById('theme-buttons').classList.remove('hidden');
-                    document.getElementById('waiting-start').classList.add('hidden');
+                    document.getElementById('screen-choose-game').classList.remove('hidden');
                 } else {
-                    document.getElementById('theme-buttons').classList.add('hidden');
-                    document.getElementById('waiting-start').classList.remove('hidden');
-                    document.getElementById('waiting-start').textContent = "Все в сборе! Ждем, пока Максим выберет тему...";
+                    document.getElementById('waiting-start').textContent = "Все в сборе! Ждем, пока Максим выберет игру...";
                 }
             } else {
-                document.getElementById('theme-buttons').classList.add('hidden');
-                document.getElementById('waiting-start').classList.remove('hidden');
                 document.getElementById('waiting-start').textContent = "Ожидание подключения всех игроков...";
             }
         });
 
         socket.on('state_update', (state) => {
             document.getElementById('screen-start').classList.add('hidden');
+            document.getElementById('screen-choose-game').classList.add('hidden');
+            document.getElementById('screen-draft').classList.add('hidden');
             document.getElementById('screen-game').classList.remove('hidden');
             render(state);
         });
@@ -134,8 +163,30 @@
         function login(idx) {
             myPlayerIndex = idx;
             document.getElementById('screen-login').classList.add('hidden');
-            document.getElementById('screen-start').classList.remove('hidden');
             socket.emit('login', { player_index: idx });
+            if (idx === 0) {
+                document.getElementById('screen-choose-game').classList.remove('hidden');
+            } else {
+                document.getElementById('screen-start').classList.remove('hidden');
+                document.getElementById('theme-buttons').classList.add('hidden');
+                document.getElementById('waiting-start').textContent = "Ждем, пока Максим выберет игру...";
+            }
+        }
+
+        function chooseGame(mode) {
+            if (myPlayerIndex !== 0) return;
+            currentGame = mode;
+            document.getElementById('screen-choose-game').classList.add('hidden');
+            if (mode === 'auction') {
+                document.getElementById('screen-start').classList.remove('hidden');
+                document.getElementById('theme-buttons').classList.remove('hidden');
+                document.getElementById('waiting-start').classList.add('hidden');
+            } else {
+                document.getElementById('screen-draft').classList.remove('hidden');
+                if (myPlayerIndex !== 0) {
+                    document.getElementById('draft-setup').classList.add('hidden');
+                }
+            }
         }
 
         function startGame(theme) {
@@ -143,11 +194,89 @@
             socket.emit('start_game', { theme: theme, player_index: myPlayerIndex });
         }
 
+        function startDraft(scheme) {
+            if (myPlayerIndex !== 0) return;
+            socket.emit('draft_start', {player_index: myPlayerIndex, scheme: scheme, club: 'Реал'});
+        }
+
+        socket.on('draft_state', (st) => {
+            document.getElementById('screen-choose-game').classList.add('hidden');
+            document.getElementById('screen-start').classList.add('hidden');
+            document.getElementById('screen-game').classList.add('hidden');
+            document.getElementById('screen-draft').classList.remove('hidden');
+            document.getElementById('draft-game').classList.remove('hidden');
+            document.getElementById('draft-setup').classList.add('hidden');
+
+            document.getElementById('draft-status').textContent =
+                `Ход: ${st.current_player_name}. Схема: ${st.scheme}`;
+            document.getElementById('draft-starters-count').textContent = st.starters.length;
+            document.getElementById('draft-coach').textContent = st.coach || '—';
+
+            const trio = document.getElementById('draft-trio');
+            trio.innerHTML = '';
+            const isMyTurn = (st.current_player_index === myPlayerIndex) && !st.sub_phase;
+            st.trio.forEach((p, i) => {
+                const b = document.createElement('button');
+                b.className = 'btn btn-success';
+                b.textContent = `${p.name} (${p.pos})`;
+                b.disabled = !isMyTurn;
+                b.onclick = () => socket.emit('draft_pick', {player_index: myPlayerIndex, index: i});
+                trio.appendChild(b);
+            });
+
+            const subArea = document.getElementById('draft-sub-area');
+            subArea.innerHTML = '';
+            if (st.sub_phase && st.sub) {
+                subArea.classList.remove('hidden');
+                if (st.sub_decision_pending) {
+                    subArea.innerHTML = `<p>Кого менять на <b>${st.sub.name} (${st.sub.pos})</b>?</p>`;
+                    st.starters.forEach((p, i) => {
+                        const b = document.createElement('button');
+                        b.className = 'btn btn-warning';
+                        b.textContent = `${p.name} (${p.pos})`;
+                        b.disabled = st.current_player_index !== myPlayerIndex;
+                        b.onclick = () => socket.emit('draft_sub_apply', {player_index: myPlayerIndex, starter_index: i});
+                        subArea.appendChild(b);
+                    });
+                } else {
+                    subArea.innerHTML = `<p>Выпала замена: <b>${st.sub.name} (${st.sub.pos})</b>. Менять?</p>`;
+                    const yes = document.createElement('button');
+                    yes.className = 'btn btn-success';
+                    yes.textContent = 'Да';
+                    yes.disabled = st.current_player_index !== myPlayerIndex;
+                    yes.onclick = () => socket.emit('draft_sub_decision', {player_index: myPlayerIndex, use: true});
+                    const no = document.createElement('button');
+                    no.className = 'btn btn-danger';
+                    no.textContent = 'Нет';
+                    no.disabled = st.current_player_index !== myPlayerIndex;
+                    no.onclick = () => socket.emit('draft_sub_decision', {player_index: myPlayerIndex, use: false});
+                    subArea.appendChild(yes);
+                    subArea.appendChild(no);
+                }
+            } else {
+                subArea.classList.add('hidden');
+            }
+        });
+
+        socket.on('draft_finished', (data) => {
+            const res = document.getElementById('draft-results');
+            res.classList.remove('hidden');
+            let html = '<h3>Итоговые составы</h3>';
+            const names = ['Макс', 'Пашок', 'Тимоха'];
+            for (const [idx, r] of Object.entries(data.results)) {
+                html += `<h4>${names[idx]} (${r.scheme})</h4>`;
+                html += `<p>Тренер: ${r.coach}</p><ul class="draft-list">`;
+                r.starters.forEach(p => html += `<li>${p.name} (${p.pos})</li>`);
+                html += '</ul>';
+                if (r.sub_used) html += `<p>Замена: ${r.sub_used.from} → ${r.sub_used.to}</p>`;
+            }
+            res.innerHTML = html;
+        });
+
         function render(state) {
             const pContainer = document.getElementById('players-container');
             pContainer.innerHTML = '';
             state.participants.forEach((p, idx) => {
-                // ВОТ ЗДЕСЬ МЫ ТЕПЕРЬ ПЕРЕБИРАЕМ МАССИВ, А НЕ ОБЪЕКТ
                 const squadStr = p.squad.map(pl => `${pl.pos}: ${pl.name}`).join('<br>') || '—';
                 const active = (idx === state.turn_index && !state.waiting_for_decision) ? 'active' : '';
                 const broke = (p.bank < 1) ? 'broke' : '';
@@ -164,7 +293,7 @@
             document.getElementById('player-name').textContent = state.current_player;
             document.getElementById('player-cat').textContent = `Категория: ${state.current_cat}`;
             document.getElementById('current-price').textContent = `$${state.current_price.toFixed(2)}`;
-            
+
             const auctionControls = document.getElementById('auction-controls');
             const decisionControls = document.getElementById('decision-controls');
             const turnBanner = document.getElementById('turn-banner');
@@ -173,7 +302,6 @@
             if (state.waiting_for_decision) {
                 auctionControls.classList.add('hidden');
                 turnBanner.textContent = `Решение за ${state.participants[state.solo_winner_id].name}`;
-                
                 if (state.solo_winner_id === myPlayerIndex) {
                     decisionControls.classList.remove('hidden');
                     waitingText.classList.add('hidden');
@@ -185,15 +313,12 @@
             } else {
                 decisionControls.classList.add('hidden');
                 auctionControls.classList.remove('hidden');
-                
                 const turnName = state.participants[state.turn_index].name;
                 turnBanner.textContent = `Ход: ${turnName}`;
-                
                 const isMyTurn = (state.turn_index === myPlayerIndex);
                 document.getElementById('btn-bid').disabled = !isMyTurn;
                 document.getElementById('btn-pass').disabled = !isMyTurn;
                 document.getElementById('bid-input').disabled = !isMyTurn;
-
                 if (!isMyTurn) {
                     waitingText.textContent = `Ожидание хода ${turnName}...`;
                     waitingText.classList.remove('hidden');
