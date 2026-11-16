@@ -37,6 +37,7 @@
         .scheme-list div { padding: 3px 0; border-bottom: 1px solid #222; }
         .scheme-list .filled { color: var(--accent); }
         .scheme-list .empty { color: #555; }
+        .scheme-list .offpos { color: #ff9800; }
         .draft-list { text-align: left; color: #ccc; font-size: 14px; }
     </style>
 </head>
@@ -229,13 +230,11 @@
         }
 
         function hasAnyOption(st, player) {
-            // проверяем, есть ли свободный слот или перестановка
             const occupied = new Set(st.starters.map(s => s.slot_index));
             for (let i = 0; i < st.scheme_view.length; i++) {
                 if (occupied.has(i)) continue;
                 if (slotMatches(player.pos, player.alt, st.scheme_view[i].pos)) return true;
             }
-            // перестановка
             for (const s of st.starters) {
                 if (!slotMatches(player.pos, player.alt, st.scheme_view[s.slot_index].pos)) continue;
                 for (let i = 0; i < st.scheme_view.length; i++) {
@@ -243,6 +242,7 @@
                     if (slotMatches(s.pos, s.alt, st.scheme_view[i].pos)) return true;
                 }
             }
+            if (st.starters.length === 10) return true;  // последний выбор — любой слот
             return false;
         }
 
@@ -261,7 +261,9 @@
             const list = document.getElementById('draft-scheme-list');
             list.innerHTML = st.scheme_view.map(s => {
                 if (s.name) {
-                    return `<div class="filled">${s.pos}: <b>${s.name}</b></div>`;
+                    const off = st.starters.find(x => x.slot_index === st.scheme_view.indexOf(s));
+                    const cls = (off && off.off_position) ? 'offpos' : 'filled';
+                    return `<div class="${cls}">${s.pos}: <b>${s.name}</b>${(off && off.off_position) ? ' (не по поз.)' : ''}</div>`;
                 } else {
                     return `<div class="empty">${s.pos}: —</div>`;
                 }
@@ -287,7 +289,6 @@
                 trio.appendChild(b);
             });
 
-            // выбор позиции/перестановки
             const choiceArea = document.getElementById('draft-choice-area');
             choiceArea.innerHTML = '';
             if (st.pending_choice) {
@@ -298,7 +299,7 @@
                     const b = document.createElement('button');
                     b.className = 'btn btn-warning';
                     if (opt.type === 'place') {
-                        b.textContent = `${opt.slot_pos}`;
+                        b.textContent = opt.off_position ? `${opt.slot_pos} (не по позиции)` : `${opt.slot_pos}`;
                     } else {
                         const mv = opt.moves[0];
                         b.textContent = `${opt.slot_pos} (сдвинуть ${mv.player} на ${mv.to_pos})`;
@@ -311,7 +312,6 @@
                 choiceArea.classList.add('hidden');
             }
 
-            // замены
             const subArea = document.getElementById('draft-sub-area');
             subArea.innerHTML = '';
             if (st.sub_phase && st.sub) {
@@ -346,14 +346,13 @@
                 subArea.classList.add('hidden');
             }
 
-            // подтверждение
             const confirmBlock = document.getElementById('draft-confirm');
             if (st.confirm_phase) {
                 confirmBlock.classList.remove('hidden');
                 const cl = document.getElementById('draft-confirm-list');
                 cl.innerHTML = '<ul>' + st.starters
                     .sort((a, b) => a.slot_index - b.slot_index)
-                    .map(p => `<li>${st.scheme_view[p.slot_index].pos}: <b>${p.name}</b></li>`)
+                    .map(p => `<li>${st.scheme_view[p.slot_index].pos}: <b>${p.name}</b>${p.off_position ? ' (не по поз.)' : ''}</li>`)
                     .join('') + '</ul>';
                 document.getElementById('draft-confirm-coach').textContent = st.coach || '—';
             } else {
@@ -374,7 +373,7 @@
                 html += `<h4>${names[idx]} (${r.scheme})</h4>`;
                 html += `<p>Тренер: ${r.coach}</p><ul class="draft-list">`;
                 r.starters.sort((a, b) => a.slot_pos.localeCompare(b.slot_pos));
-                r.starters.forEach(p => html += `<li>${p.slot_pos}: ${p.name}</li>`);
+                r.starters.forEach(p => html += `<li>${p.slot_pos}: ${p.name}${p.off_position ? ' (не по поз.)' : ''}</li>`);
                 html += '</ul>';
                 if (r.sub_used) html += `<p>Замена: ${r.sub_used.from} → ${r.sub_used.to}</p>`;
             }
