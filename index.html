@@ -119,6 +119,7 @@
                         <div>
                             <h3>Тройка</h3>
                             <div class="controls" id="draft-trio"></div>
+                            <div id="draft-choice-area" class="hidden" style="text-align:center;"></div>
                             <div id="draft-sub-area" class="hidden" style="text-align:center;"></div>
                         </div>
                         <div>
@@ -126,6 +127,12 @@
                             <div class="scheme-list" id="draft-scheme-list"></div>
                             <p style="text-align:center; margin-top:10px;">Тренер: <b id="draft-coach">—</b></p>
                         </div>
+                    </div>
+                    <div id="draft-confirm" class="hidden" style="text-align:center; margin-top:20px;">
+                        <h3>Итоговый состав</h3>
+                        <div id="draft-confirm-list" class="draft-list"></div>
+                        <p>Тренер: <b id="draft-confirm-coach">—</b></p>
+                        <button class="btn btn-success" onclick="confirmDraft()">Зафиксировать состав</button>
                     </div>
                     <div id="draft-results" class="hidden"></div>
                 </div>
@@ -209,6 +216,36 @@
             socket.emit('draft_start', {player_index: myPlayerIndex, scheme: scheme, club: 'Реал'});
         }
 
+        function slotMatches(playerPos, playerAlt, slotPos) {
+            const map = { "ЛВ": "ЛП", "ПВ": "ПП" };
+            const sp = map[slotPos] || slotPos;
+            const pp = map[playerPos] || playerPos;
+            if (pp === sp) return true;
+            for (const a of (playerAlt || [])) {
+                const ap = map[a] || a;
+                if (ap === sp) return true;
+            }
+            return false;
+        }
+
+        function hasAnyOption(st, player) {
+            // проверяем, есть ли свободный слот или перестановка
+            const occupied = new Set(st.starters.map(s => s.slot_index));
+            for (let i = 0; i < st.scheme_view.length; i++) {
+                if (occupied.has(i)) continue;
+                if (slotMatches(player.pos, player.alt, st.scheme_view[i].pos)) return true;
+            }
+            // перестановка
+            for (const s of st.starters) {
+                if (!slotMatches(player.pos, player.alt, st.scheme_view[s.slot_index].pos)) continue;
+                for (let i = 0; i < st.scheme_view.length; i++) {
+                    if (occupied.has(i)) continue;
+                    if (slotMatches(s.pos, s.alt, st.scheme_view[i].pos)) return true;
+                }
+            }
+            return false;
+        }
+
         socket.on('draft_state', (st) => {
             document.getElementById('screen-choose-game').classList.add('hidden');
             document.getElementById('screen-start').classList.add('hidden');
@@ -232,18 +269,49 @@
 
             const trio = document.getElementById('draft-trio');
             trio.innerHTML = '';
-            const isMyTurn = (st.current_player_index === myPlayerIndex) && !st.sub_phase;
+            const isMyTurn = (st.current_player_index === myPlayerIndex) && !st.sub_phase && !st.confirm_phase && !st.pending_choice;
             st.trio.forEach((p, i) => {
                 const b = document.createElement('button');
                 b.className = 'btn btn-success';
-                b.textContent = `${p.name} (${p.pos})`;
-                const isCoachBlocked = (p.type === 'coach' && st.coach);
-                b.disabled = !isMyTurn || isCoachBlocked;
-                if (isCoachBlocked) b.textContent += ' [тренер уже есть]';
+                b.textContent = `${p.name} (${p.pos}${p.alt && p.alt.length ? '/' + p.alt.join('/') : ''})`;
+                let disabled = !isMyTurn;
+                if (p.type === 'coach' && st.coach) {
+                    disabled = true;
+                    b.textContent += ' [тренер уже есть]';
+                } else if (p.type === 'player' && !hasAnyOption(st, p)) {
+                    disabled = true;
+                    b.textContent += ' [нет места]';
+                }
+                b.disabled = disabled;
                 b.onclick = () => socket.emit('draft_pick', {player_index: myPlayerIndex, index: i});
                 trio.appendChild(b);
             });
 
+            // выбор позиции/перестановки
+            const choiceArea = document.getElementById('draft-choice-area');
+            choiceArea.innerHTML = '';
+            if (st.pending_choice) {
+                choiceArea.classList.remove('hidden');
+                const pc = st.pending_choice;
+                choiceArea.innerHTML = `<p>Куда поставить <b>${pc.chosen.name}</b>?</p>`;
+                pc.options.forEach((opt, i) => {
+                    const b = document.createElement('button');
+                    b.className = 'btn btn-warning';
+                    if (opt.type === 'place') {
+                        b.textContent = `${opt.slot_pos}`;
+                    } else {
+                        const mv = opt.moves[0];
+                        b.textContent = `${opt.slot_pos} (сдвинуть ${mv.player} на ${mv.to_pos})`;
+                    }
+                    b.disabled = st.current_player_index !== myPlayerIndex;
+                    b.onclick = () => socket.emit('draft_choose_position', {player_index: myPlayerIndex, option_index: i});
+                    choiceArea.appendChild(b);
+                });
+            } else {
+                choiceArea.classList.add('hidden');
+            }
+
+            // замены
             const subArea = document.getElementById('draft-sub-area');
             subArea.innerHTML = '';
             if (st.sub_phase && st.sub) {
@@ -254,7 +322,7 @@
                     st.starters.forEach((p, i) => {
                         const b = document.createElement('button');
                         b.className = 'btn btn-warning';
-                        b.textContent = `${p.name} (${p.pos})`;
+                        b.textContent = `${p.name} (${st.scheme_view[p.slot_index].pos})`;
                         b.disabled = st.current_player_index !== myPlayerIndex;
                         b.onclick = () => socket.emit('draft_sub_apply', {player_index: myPlayerIndex, starter_index: i});
                         subArea.appendChild(b);
@@ -277,7 +345,25 @@
             } else {
                 subArea.classList.add('hidden');
             }
+
+            // подтверждение
+            const confirmBlock = document.getElementById('draft-confirm');
+            if (st.confirm_phase) {
+                confirmBlock.classList.remove('hidden');
+                const cl = document.getElementById('draft-confirm-list');
+                cl.innerHTML = '<ul>' + st.starters
+                    .sort((a, b) => a.slot_index - b.slot_index)
+                    .map(p => `<li>${st.scheme_view[p.slot_index].pos}: <b>${p.name}</b></li>`)
+                    .join('') + '</ul>';
+                document.getElementById('draft-confirm-coach').textContent = st.coach || '—';
+            } else {
+                confirmBlock.classList.add('hidden');
+            }
         });
+
+        function confirmDraft() {
+            socket.emit('draft_confirm', {player_index: myPlayerIndex});
+        }
 
         socket.on('draft_finished', (data) => {
             const res = document.getElementById('draft-results');
@@ -287,7 +373,8 @@
             for (const [idx, r] of Object.entries(data.results)) {
                 html += `<h4>${names[idx]} (${r.scheme})</h4>`;
                 html += `<p>Тренер: ${r.coach}</p><ul class="draft-list">`;
-                r.starters.forEach(p => html += `<li>${p.name} (${p.pos})</li>`);
+                r.starters.sort((a, b) => a.slot_pos.localeCompare(b.slot_pos));
+                r.starters.forEach(p => html += `<li>${p.slot_pos}: ${p.name}</li>`);
                 html += '</ul>';
                 if (r.sub_used) html += `<p>Замена: ${r.sub_used.from} → ${r.sub_used.to}</p>`;
             }
