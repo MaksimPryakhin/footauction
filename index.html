@@ -27,7 +27,8 @@
         .auction-box { text-align: center; padding: 20px; border: 2px dashed #444; border-radius: 12px; position: relative; }
         .player-reveal { font-size: 32px; font-weight: bold; color: #ffeb3b; margin: 10px 0; }
         .controls { display: flex; justify-content: center; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
-        input[type="number"] { padding: 10px; font-size: 18px; border-radius: 8px; border: 1px solid #444; background: #333; color: white; width: 100px; text-align: center;}
+        input[type="number"], select { padding: 10px; font-size: 18px; border-radius: 8px; border: 1px solid #444; background: #333; color: white; min-width: 120px; text-align: center;}
+        input[type="number"] { width: 100px; }
         .log { max-height: 150px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 14px;}
         .hidden { display: none !important; }
         .turn-banner { font-size: 20px; font-weight: bold; color: #ffeb3b; margin-bottom: 10px; text-transform: uppercase; }
@@ -110,9 +111,11 @@
             <div class="card">
                 <h2>Символическая сборная — <span id="draft-club">Реал</span></h2>
                 <div id="draft-setup">
+                    <p style="text-align:center;">Клуб (выбирает Максим):</p>
+                    <div class="controls"><select id="club-select"></select></div>
                     <p style="text-align:center;">Схема (выбирает Максим):</p>
                     <div class="controls" id="scheme-buttons"></div>
-                    <p id="draft-waiting" class="hidden" style="color:#ffeb3b; text-align:center; font-weight:bold;">Ждем, пока Максим выберет схему...</p>
+                    <p id="draft-waiting" class="hidden" style="color:#ffeb3b; text-align:center; font-weight:bold;">Ждем, пока Максим выберет клуб и схему...</p>
                 </div>
                 <div id="draft-game" class="hidden">
                     <p id="draft-status" class="turn-banner"></p>
@@ -146,6 +149,20 @@
         let myPlayerIndex = -1;
         let currentGame = null;
         let dragFromSlot = null;
+        let clubsList = [];
+
+        async function loadClubs() {
+            try {
+                const res = await fetch('/api/clubs');
+                const data = await res.json();
+                clubsList = data.clubs || [];
+            } catch (e) {
+                clubsList = ['Реал'];
+            }
+            const sel = document.getElementById('club-select');
+            sel.innerHTML = clubsList.map(c => `<option value="${c}">${c}</option>`).join('');
+        }
+        loadClubs();
 
         function renderSchemeButtons() {
             const container = document.getElementById('scheme-buttons');
@@ -228,7 +245,8 @@
 
         function startDraft(scheme) {
             if (myPlayerIndex !== 0) { alert('Схему выбирает только Максим'); return; }
-            socket.emit('draft_start', {player_index: myPlayerIndex, scheme: scheme, club: 'Реал'});
+            const club = document.getElementById('club-select').value || 'Реал';
+            socket.emit('draft_start', {player_index: myPlayerIndex, scheme: scheme, club: club});
         }
 
         function slotMatches(playerPos, playerAlt, slotPos) {
@@ -267,8 +285,9 @@
             document.getElementById('draft-game').classList.remove('hidden');
             document.getElementById('draft-setup').classList.add('hidden');
 
+            document.getElementById('draft-club').textContent = st.club;
             document.getElementById('draft-status').textContent =
-                `Ход: ${st.current_player_name}. Схема: ${st.scheme}`;
+                `Ход: ${st.current_player_name}. Клуб: ${st.club}. Схема: ${st.scheme}`;
             document.getElementById('draft-coach').textContent = st.coach || '—';
 
             const list = document.getElementById('draft-scheme-list');
