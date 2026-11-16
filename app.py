@@ -113,22 +113,76 @@ SCHEMES = {
     "4-2-3-1": ["ВРТ", "ЦЗ", "ЦЗ", "ЛЗ", "ПЗ", "ЦОП", "ЦП", "ЛВ", "ЦАП", "ПВ", "ФРВ"],
 }
 
-# ЛВ/ПВ в схемах маппятся на пул ЛП/ПП, чтобы не было дублей игроков
 POS_TO_POOL = {"ЛВ": "ЛП", "ПВ": "ПП"}
 
+# Пул Реала: у каждого игрока основная позиция + альтернативные (если есть)
 CLUBS = {
     "Реал": {
         "players": {
-            "ВРТ": ["Касильяс", "Куртуа", "Диего Лопес", "Навас"],
-            "ЦЗ":  ["Рамос", "Пепе", "Варан", "Карвальо", "Альбиоль", "Милитао", "Рюдигер"],
-            "ЛЗ":  ["Марсело", "Карлос", "Менди", "Эрнандес"],
-            "ПЗ":  ["Карвахаль", "Сальгадо", "Арбелоа", "Данило"],
-            "ЦОП": ["Макелеле", "Каземиро", "Алонсо", "Кроос"],
-            "ЦП":  ["Модрич", "Гути", "Диарра", "Иско"],
-            "ЦАП": ["Зидан", "Озил", "Джеймс", "Бэйл"],
-            "ЛП":  ["Роналдо К.", "Робиньо", "Винисиус", "Асенсио"],
-            "ПП":  ["Фигу", "Ди Мария", "Бекхэм", "Лукас"],
-            "ФРВ": ["Рауль", "Бензема", "Игуаин", "Мората", "Роналдо Браз."],
+            "ВРТ": [
+                {"name": "Касильяс", "alt": []},
+                {"name": "Куртуа", "alt": []},
+                {"name": "Диего Лопес", "alt": []},
+                {"name": "Навас", "alt": []},
+            ],
+            "ЦЗ": [
+                {"name": "Рамос", "alt": ["ПЗ", "ЦОП"]},
+                {"name": "Пепе", "alt": []},
+                {"name": "Варан", "alt": []},
+                {"name": "Карвальо", "alt": []},
+                {"name": "Альбиоль", "alt": []},
+                {"name": "Милитао", "alt": []},
+                {"name": "Рюдигер", "alt": []},
+            ],
+            "ЛЗ": [
+                {"name": "Марсело", "alt": ["ЛП"]},
+                {"name": "Карлос", "alt": []},
+                {"name": "Менди", "alt": []},
+                {"name": "Эрнандес", "alt": []},
+            ],
+            "ПЗ": [
+                {"name": "Карвахаль", "alt": ["ПП"]},
+                {"name": "Сальгадо", "alt": []},
+                {"name": "Арбелоа", "alt": []},
+                {"name": "Данило", "alt": []},
+            ],
+            "ЦОП": [
+                {"name": "Макелеле", "alt": []},
+                {"name": "Каземиро", "alt": ["ЦЗ"]},
+                {"name": "Алонсо", "alt": []},
+                {"name": "Кроос", "alt": ["ЦП"]},
+            ],
+            "ЦП": [
+                {"name": "Модрич", "alt": ["ЦАП"]},
+                {"name": "Гути", "alt": ["ЦАП"]},
+                {"name": "Диарра", "alt": ["ЦОП"]},
+                {"name": "Иско", "alt": ["ЦАП", "ЛП"]},
+            ],
+            "ЦАП": [
+                {"name": "Зидан", "alt": ["ЦП"]},
+                {"name": "Озил", "alt": ["ПП"]},
+                {"name": "Джеймс", "alt": ["ПП"]},
+                {"name": "Бэйл", "alt": ["ПП", "ФРВ"]},
+            ],
+            "ЛП": [
+                {"name": "Роналдо К.", "alt": ["ФРВ"]},
+                {"name": "Робиньо", "alt": ["ФРВ"]},
+                {"name": "Винисиус", "alt": ["ФРВ"]},
+                {"name": "Асенсио", "alt": ["ПП", "ФРВ"]},
+            ],
+            "ПП": [
+                {"name": "Фигу", "alt": ["ЦАП"]},
+                {"name": "Ди Мария", "alt": ["ЛП"]},
+                {"name": "Бекхэм", "alt": ["ЦП"]},
+                {"name": "Лукас", "alt": []},
+            ],
+            "ФРВ": [
+                {"name": "Рауль", "alt": ["ЦАП"]},
+                {"name": "Бензема", "alt": ["ЦАП"]},
+                {"name": "Игуаин", "alt": []},
+                {"name": "Мората", "alt": []},
+                {"name": "Роналдо Браз.", "alt": []},
+            ],
         },
         "coaches": ["Дель Боске", "Моуринью", "Анчелотти", "Зидан"],
     },
@@ -140,7 +194,7 @@ DRAFT_STATE = {
     "scheme": "4-4-2",
     "pool": [],
     "subs": [],
-    "starters": [],
+    "starters": [],   # список {"name","pos","slot_index","type"}
     "coach": None,
     "trio": [],
     "current_player_index": 0,
@@ -150,27 +204,37 @@ DRAFT_STATE = {
     "sub_index": 0,
     "sub_used": None,
     "sub_decision_pending": False,
+    "confirm_phase": False,
+    # состояние выбора позиции/перестановки
+    "pending_choice": None,  # {"chosen": {...}, "options": [...]}
 }
 
 
 def draft_build_pool(club):
     pool = []
-    for pos, names in club["players"].items():
-        for n in names:
-            pool.append({"name": n, "pos": pos, "type": "player"})
+    for pos, players in club["players"].items():
+        for p in players:
+            pool.append({"name": p["name"], "pos": pos, "alt": p["alt"], "type": "player"})
     for c in club["coaches"]:
-        pool.append({"name": c, "pos": "ТРЕНЕР", "type": "coach"})
+        pool.append({"name": c, "pos": "ТРЕНЕР", "alt": [], "type": "coach"})
     return pool
 
 
+def player_can_play(player_pos, player_alt, slot_pos):
+    slot_pool = POS_TO_POOL.get(slot_pos, slot_pos)
+    if player_pos == slot_pos or POS_TO_POOL.get(player_pos, player_pos) == slot_pool:
+        return True
+    for a in player_alt:
+        if a == slot_pos or POS_TO_POOL.get(a, a) == slot_pool:
+            return True
+    return False
+
+
 def draft_scheme_view(st):
-    """Список 11 слотов схемы с именами игроков (или None)."""
     scheme = SCHEMES[st["scheme"]]
-    view = []
-    starters = st["starters"]
-    for i, pos in enumerate(scheme):
-        name = starters[i]["name"] if i < len(starters) else None
-        view.append({"pos": pos, "name": name})
+    view = [{"pos": pos, "name": None} for pos in scheme]
+    for s in st["starters"]:
+        view[s["slot_index"]]["name"] = s["name"]
     return view
 
 
@@ -194,6 +258,8 @@ def draft_emit():
         "sub": sub,
         "sub_total": len(st["subs"]),
         "sub_index": st["sub_index"],
+        "confirm_phase": st["confirm_phase"],
+        "pending_choice": st["pending_choice"],
         "results": st["results"],
     })
 
@@ -208,7 +274,6 @@ def draft_next_trio():
     if len(st["pool"]) < 3:
         st["trio"] = []
         return
-    # подбираем тройку так, чтобы не было «только тренеры», если тренер уже есть
     for _ in range(50):
         trio = random.sample(st["pool"], 3)
         if st["coach"] is not None and all(p["type"] == "coach" for p in trio):
@@ -216,6 +281,35 @@ def draft_next_trio():
         st["trio"] = trio
         return
     st["trio"] = random.sample(st["pool"], 3)
+
+
+def build_options(st, chosen):
+    """Возвращает список вариантов: свободные слоты + перестановки."""
+    scheme = SCHEMES[st["scheme"]]
+    occupied = {s["slot_index"]: s for s in st["starters"]}
+    free_slots = [i for i in range(len(scheme)) if i not in occupied]
+    options = []
+
+    # прямые постановки
+    for i in free_slots:
+        if player_can_play(chosen["pos"], chosen["alt"], scheme[i]):
+            options.append({"type": "place", "slot_index": i, "slot_pos": scheme[i], "moves": []})
+
+    # перестановки: новый игрок встаёт на слот занятого X, X сдвигается на свободный
+    for occ_idx, occ in occupied.items():
+        if not player_can_play(chosen["pos"], chosen["alt"], scheme[occ_idx]):
+            continue
+        # куда можно сдвинуть occ
+        for free_idx in free_slots:
+            if player_can_play(occ["pos"], occ.get("alt", []), scheme[free_idx]):
+                options.append({
+                    "type": "swap",
+                    "slot_index": occ_idx,
+                    "slot_pos": scheme[occ_idx],
+                    "moves": [{"from_slot": occ_idx, "to_slot": free_idx,
+                               "player": occ["name"], "to_pos": scheme[free_idx]}],
+                })
+    return options
 
 
 @socketio.on('draft_start')
@@ -238,6 +332,8 @@ def handle_draft_start(data):
         "sub_index": 0,
         "sub_used": None,
         "sub_decision_pending": False,
+        "confirm_phase": False,
+        "pending_choice": None,
     })
     pool = draft_build_pool(club)
     subs = random.sample(pool, 8)
@@ -250,25 +346,77 @@ def handle_draft_start(data):
 @socketio.on('draft_pick')
 def handle_draft_pick(data):
     st = DRAFT_STATE
-    if not st["active"] or st["sub_phase"]:
+    if not st["active"] or st["sub_phase"] or st["confirm_phase"]:
         return
     if data.get('player_index') != st["current_player_index"]:
         return
+    if st["pending_choice"] is not None:
+        return  # ждём выбор позиции
     idx = int(data.get('index', -1))
     if idx < 0 or idx >= len(st["trio"]):
         return
     chosen = st["trio"][idx]
     if chosen["type"] == "coach":
         if st["coach"] is not None:
-            return  # второго тренера нельзя
+            return
         st["coach"] = chosen["name"]
+        st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
+        st["trio"] = []
+        draft_next_trio()
+        draft_emit()
+        return
+
+    options = build_options(st, chosen)
+    if not options:
+        return  # нет места — сервер не пропускает (кнопка должна быть disabled)
+    if len(options) == 1:
+        apply_option(st, chosen, options[0])
+        st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
+        st["trio"] = []
+        draft_next_trio()
+        draft_emit()
     else:
-        if len(st["starters"]) < 11:
-            st["starters"].append(chosen)
+        st["pending_choice"] = {"chosen": chosen, "options": options}
+        draft_emit()
+
+
+@socketio.on('draft_choose_position')
+def handle_draft_choose_position(data):
+    st = DRAFT_STATE
+    if not st["active"] or st["pending_choice"] is None:
+        return
+    if data.get('player_index') != st["current_player_index"]:
+        return
+    opt_idx = int(data.get('option_index', -1))
+    opts = st["pending_choice"]["options"]
+    if opt_idx < 0 or opt_idx >= len(opts):
+        return
+    chosen = st["pending_choice"]["chosen"]
+    apply_option(st, chosen, opts[opt_idx])
+    st["pending_choice"] = None
     st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
     st["trio"] = []
     draft_next_trio()
     draft_emit()
+
+
+def apply_option(st, chosen, opt):
+    if opt["type"] == "place":
+        st["starters"].append({
+            "name": chosen["name"], "pos": chosen["pos"], "alt": chosen["alt"],
+            "slot_index": opt["slot_index"], "type": "player"
+        })
+    else:  # swap
+        # сдвигаем старого
+        for mv in opt["moves"]:
+            for s in st["starters"]:
+                if s["slot_index"] == mv["from_slot"]:
+                    s["slot_index"] = mv["to_slot"]
+                    break
+        st["starters"].append({
+            "name": chosen["name"], "pos": chosen["pos"], "alt": chosen["alt"],
+            "slot_index": opt["slot_index"], "type": "player"
+        })
 
 
 @socketio.on('draft_sub_decision')
@@ -279,13 +427,12 @@ def handle_draft_sub_decision(data):
     if data.get('player_index') != st["current_player_index"]:
         return
     if not data.get('use'):
-        # отказ — переходим к следующей замене
         st["sub_index"] += 1
         st["sub_decision_pending"] = False
         if st["sub_index"] >= len(st["subs"]):
-            draft_finish_current()
-        else:
-            draft_emit()
+            st["sub_phase"] = False
+            st["confirm_phase"] = True
+        draft_emit()
         return
     st["sub_decision_pending"] = True
     draft_emit()
@@ -303,16 +450,33 @@ def handle_draft_sub_apply(data):
         return
     sub = st["subs"][st["sub_index"]]
     old = st["starters"][idx]
-    st["starters"][idx] = sub
+    # заменяем: новый игрок встаёт на слот старого
+    st["starters"][idx] = {
+        "name": sub["name"], "pos": sub["pos"], "alt": sub.get("alt", []),
+        "slot_index": old["slot_index"], "type": "player"
+    }
     st["sub_used"] = {"from": old["name"], "to": sub["name"]}
     st["sub_decision_pending"] = False
+    st["sub_phase"] = False
+    st["confirm_phase"] = True
+    draft_emit()
+
+
+@socketio.on('draft_confirm')
+def handle_draft_confirm(data):
+    st = DRAFT_STATE
+    if not st["active"] or not st["confirm_phase"]:
+        return
+    if data.get('player_index') != st["current_player_index"]:
+        return
+    st["confirm_phase"] = False
     draft_finish_current()
 
 
 def draft_finish_current():
     st = DRAFT_STATE
     st["results"][st["current_player_index"]] = {
-        "starters": [{"name": p["name"], "pos": p["pos"]} for p in st["starters"]],
+        "starters": [{"name": p["name"], "pos": p["pos"], "slot_pos": SCHEMES[st["scheme"]][p["slot_index"]]} for p in st["starters"]],
         "coach": st["coach"],
         "scheme": st["scheme"],
         "sub_used": st["sub_used"],
@@ -328,6 +492,8 @@ def draft_finish_current():
         st["sub_index"] = 0
         st["sub_used"] = None
         st["sub_decision_pending"] = False
+        st["confirm_phase"] = False
+        st["pending_choice"] = None
         club = CLUBS[st["club"]]
         pool = draft_build_pool(club)
         subs = random.sample(pool, 8)
