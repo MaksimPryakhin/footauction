@@ -39,6 +39,7 @@
         .scheme-list .empty { color: #555; }
         .scheme-list .offpos { color: #ff9800; }
         .draft-list { text-align: left; color: #ccc; font-size: 14px; }
+        #screen-draft { position: relative; z-index: 10; }
     </style>
 </head>
 <body>
@@ -107,11 +108,7 @@
                 <h2>Символическая сборная — <span id="draft-club">Реал</span></h2>
                 <div id="draft-setup">
                     <p style="text-align:center;">Схема (выбирает Максим):</p>
-                    <div class="controls" id="scheme-buttons">
-                        <button class="btn btn-primary" onclick="startDraft('4-4-2')">4-4-2</button>
-                        <button class="btn btn-primary" onclick="startDraft('4-3-3')">4-3-3</button>
-                        <button class="btn btn-primary" onclick="startDraft('4-2-3-1')">4-2-3-1</button>
-                    </div>
+                    <div class="controls" id="scheme-buttons"></div>
                     <p id="draft-waiting" class="hidden" style="color:#ffeb3b; text-align:center; font-weight:bold;">Ждем, пока Максим выберет схему...</p>
                 </div>
                 <div id="draft-game" class="hidden">
@@ -146,7 +143,23 @@
         let myPlayerIndex = -1;
         let currentGame = null;
 
+        // ===== динамические кнопки схем =====
+        function renderSchemeButtons() {
+            const container = document.getElementById('scheme-buttons');
+            container.innerHTML = '';
+            ['4-4-2', '4-3-3', '4-2-3-1'].forEach(s => {
+                const b = document.createElement('button');
+                b.className = 'btn btn-primary';
+                b.textContent = s;
+                b.onclick = () => startDraft(s);
+                container.appendChild(b);
+            });
+        }
+        renderSchemeButtons();
+
+        socket.on('connect', () => console.log('socket connected', socket.id));
         socket.on('players_ready', (isReady) => {
+            console.log('players_ready', isReady);
             if (myPlayerIndex === -1) return;
             if (isReady) {
                 if (myPlayerIndex === 0) {
@@ -160,6 +173,7 @@
         });
 
         socket.on('state_update', (state) => {
+            console.log('state_update', state);
             document.getElementById('screen-start').classList.add('hidden');
             document.getElementById('screen-choose-game').classList.add('hidden');
             document.getElementById('screen-draft').classList.add('hidden');
@@ -193,6 +207,7 @@
 
         function chooseGame(mode) {
             if (myPlayerIndex !== 0) return;
+            console.log('chooseGame', mode);
             currentGame = mode;
             document.getElementById('screen-choose-game').classList.add('hidden');
             if (mode === 'auction') {
@@ -201,19 +216,23 @@
                 document.getElementById('waiting-start').classList.add('hidden');
             } else {
                 document.getElementById('screen-draft').classList.remove('hidden');
-                if (myPlayerIndex !== 0) {
-                    document.getElementById('draft-setup').classList.add('hidden');
-                }
+                document.getElementById('draft-setup').classList.remove('hidden');
+                document.getElementById('draft-waiting').classList.add('hidden');
             }
         }
 
         function startGame(theme) {
             if (myPlayerIndex !== 0) return;
+            console.log('start_game', theme);
             socket.emit('start_game', { theme: theme, player_index: myPlayerIndex });
         }
 
         function startDraft(scheme) {
-            if (myPlayerIndex !== 0) return;
+            if (myPlayerIndex !== 0) {
+                alert('Схему выбирает только Максим');
+                return;
+            }
+            console.log('draft_start', scheme, myPlayerIndex);
             socket.emit('draft_start', {player_index: myPlayerIndex, scheme: scheme, club: 'Реал'});
         }
 
@@ -242,11 +261,12 @@
                     if (slotMatches(s.pos, s.alt, st.scheme_view[i].pos)) return true;
                 }
             }
-            if (st.starters.length === 10) return true;  // последний выбор — любой слот
+            if (st.starters.length === 10) return true;
             return false;
         }
 
         socket.on('draft_state', (st) => {
+            console.log('draft_state', st);
             document.getElementById('screen-choose-game').classList.add('hidden');
             document.getElementById('screen-start').classList.add('hidden');
             document.getElementById('screen-game').classList.add('hidden');
@@ -259,9 +279,9 @@
             document.getElementById('draft-coach').textContent = st.coach || '—';
 
             const list = document.getElementById('draft-scheme-list');
-            list.innerHTML = st.scheme_view.map(s => {
+            list.innerHTML = st.scheme_view.map((s, i) => {
                 if (s.name) {
-                    const off = st.starters.find(x => x.slot_index === st.scheme_view.indexOf(s));
+                    const off = st.starters.find(x => x.slot_index === i);
                     const cls = (off && off.off_position) ? 'offpos' : 'filled';
                     return `<div class="${cls}">${s.pos}: <b>${s.name}</b>${(off && off.off_position) ? ' (не по поз.)' : ''}</div>`;
                 } else {
@@ -350,7 +370,7 @@
             if (st.confirm_phase) {
                 confirmBlock.classList.remove('hidden');
                 const cl = document.getElementById('draft-confirm-list');
-                cl.innerHTML = '<ul>' + st.starters
+                cl.innerHTML = '<ul>' + [...st.starters]
                     .sort((a, b) => a.slot_index - b.slot_index)
                     .map(p => `<li>${st.scheme_view[p.slot_index].pos}: <b>${p.name}</b>${p.off_position ? ' (не по поз.)' : ''}</li>`)
                     .join('') + '</ul>';
@@ -365,6 +385,7 @@
         }
 
         socket.on('draft_finished', (data) => {
+            console.log('draft_finished', data);
             const res = document.getElementById('draft-results');
             res.classList.remove('hidden');
             let html = '<h3>Итоговые составы</h3>';
@@ -372,7 +393,7 @@
             for (const [idx, r] of Object.entries(data.results)) {
                 html += `<h4>${names[idx]} (${r.scheme})</h4>`;
                 html += `<p>Тренер: ${r.coach}</p><ul class="draft-list">`;
-                r.starters.sort((a, b) => a.slot_pos.localeCompare(b.slot_pos));
+                [...r.starters].sort((a, b) => a.slot_pos.localeCompare(b.slot_pos));
                 r.starters.forEach(p => html += `<li>${p.slot_pos}: ${p.name}${p.off_position ? ' (не по поз.)' : ''}</li>`);
                 html += '</ul>';
                 if (r.sub_used) html += `<p>Замена: ${r.sub_used.from} → ${r.sub_used.to}</p>`;
