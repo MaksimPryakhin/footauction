@@ -366,19 +366,10 @@ def handle_draft_pick(data):
         draft_emit()
         return
 
+    # ВСЕГДА показываем выбор позиции
     options = build_options(st, chosen)
-    if not options:
-        return
-    if len(options) == 1:
-        apply_option(st, chosen, options[0])
-        st["pool"] = [p for p in st["pool"] if not (p["type"] == "coach" and p["name"] == chosen["name"])]
-        st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
-        st["trio"] = []
-        draft_next_trio()
-        draft_emit()
-    else:
-        st["pending_choice"] = {"chosen": chosen, "options": options}
-        draft_emit()
+    st["pending_choice"] = {"chosen": chosen, "options": options}
+    draft_emit()
 
 
 @socketio.on('draft_choose_position')
@@ -419,6 +410,44 @@ def apply_option(st, chosen, opt):
             "name": chosen["name"], "pos": chosen["pos"], "alt": chosen["alt"],
             "slot_index": opt["slot_index"], "type": "player"
         })
+
+
+@socketio.on('draft_move')
+def handle_draft_move(data):
+    st = DRAFT_STATE
+    if not st["active"] or st["sub_phase"] or st["confirm_phase"] or st["pending_choice"]:
+        return
+    if data.get('player_index') != st["current_player_index"]:
+        return
+    from_slot = int(data.get('from_slot', -1))
+    to_slot = int(data.get('to_slot', -1))
+    scheme = SCHEMES[st["scheme"]]
+    if from_slot < 0 or to_slot < 0 or from_slot >= len(scheme) or to_slot >= len(scheme):
+        return
+    if from_slot == to_slot:
+        return
+    # найти игрока на from_slot
+    from_player = None
+    to_player = None
+    for s in st["starters"]:
+        if s["slot_index"] == from_slot:
+            from_player = s
+        if s["slot_index"] == to_slot:
+            to_player = s
+    if from_player is None:
+        return
+    # проверить, может ли from_player играть на to_slot
+    if not player_can_play(from_player["pos"], from_player.get("alt", []), scheme[to_slot]):
+        return
+    # если на to_slot кто-то есть — проверить, может ли он на from_slot
+    if to_player is not None:
+        if not player_can_play(to_player["pos"], to_player.get("alt", []), scheme[from_slot]):
+            return
+        to_player["slot_index"] = from_slot
+        to_player["off_position"] = not player_can_play(to_player["pos"], to_player.get("alt", []), scheme[from_slot])
+    from_player["slot_index"] = to_slot
+    from_player["off_position"] = not player_can_play(from_player["pos"], from_player.get("alt", []), scheme[to_slot])
+    draft_emit()
 
 
 @socketio.on('draft_sub_decision')
