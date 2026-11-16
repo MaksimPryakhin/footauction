@@ -121,66 +121,62 @@ CLUBS = {
             "ВРТ": [
                 {"name": "Касильяс", "alt": []},
                 {"name": "Куртуа", "alt": []},
-                {"name": "Диего Лопес", "alt": []},
                 {"name": "Навас", "alt": []},
             ],
             "ЦЗ": [
-                {"name": "Рамос", "alt": ["ПЗ", "ЦОП"]},
+                {"name": "Рамос", "alt": ["ПЗ"]},
                 {"name": "Пепе", "alt": []},
                 {"name": "Варан", "alt": []},
                 {"name": "Карвальо", "alt": []},
-                {"name": "Альбиоль", "alt": []},
-                {"name": "Милитао", "alt": []},
+                {"name": "Йерро", "alt": []},
                 {"name": "Рюдигер", "alt": []},
+                {"name": "Начо", "alt": ["ПЗ"]},
             ],
             "ЛЗ": [
                 {"name": "Марсело", "alt": ["ЛП"]},
-                {"name": "Карлос", "alt": []},
+                {"name": "Роберто Карлос", "alt": []},
                 {"name": "Менди", "alt": []},
-                {"name": "Эрнандес", "alt": []},
             ],
             "ПЗ": [
                 {"name": "Карвахаль", "alt": ["ПП"]},
                 {"name": "Сальгадо", "alt": []},
                 {"name": "Арбелоа", "alt": []},
-                {"name": "Данило", "alt": []},
+                {"name": "Вальверде", "alt": ["ЦП"]},
             ],
             "ЦОП": [
-                {"name": "Макелеле", "alt": []},
-                {"name": "Каземиро", "alt": ["ЦЗ"]},
-                {"name": "Алонсо", "alt": []},
-                {"name": "Кроос", "alt": ["ЦП"]},
+                {"name": "Макелеле", "alt": ["ЦП"]},
+                {"name": "Каземиро", "alt": ["ЦП", "ЦЗ"]},
+                {"name": "Алонсо", "alt": ["ЦП"]},
+                {"name": "Кросс", "alt": ["ЦП"]},
             ],
             "ЦП": [
                 {"name": "Модрич", "alt": ["ЦАП"]},
                 {"name": "Гути", "alt": ["ЦАП"]},
-                {"name": "Диарра", "alt": ["ЦОП"]},
                 {"name": "Иско", "alt": ["ЦАП", "ЛП"]},
             ],
             "ЦАП": [
                 {"name": "Зидан", "alt": ["ЦП"]},
                 {"name": "Озил", "alt": ["ПП"]},
-                {"name": "Джеймс", "alt": ["ПП"]},
-                {"name": "Бэйл", "alt": ["ПП", "ФРВ"]},
+                {"name": "Бекхэм", "alt": ["ЦП", "ПП"]},
+                {"name": "Беллингем", "alt": ["ЦП"]},
             ],
-            "ЛП": [
-                {"name": "Роналдо К.", "alt": ["ФРВ"]},
-                {"name": "Робиньо", "alt": ["ФРВ"]},
-                {"name": "Винисиус", "alt": ["ФРВ"]},
-                {"name": "Асенсио", "alt": ["ПП", "ФРВ"]},
+            "ЛВ": [
+                {"name": "Криштиану Роналду", "alt": ["ФРВ"]},
+                {"name": "Винисиус", "alt": ["ЛП"]},
+                {"name": "Асенсио", "alt": ["ПВ"]},
             ],
-            "ПП": [
-                {"name": "Фигу", "alt": ["ЦАП"]},
-                {"name": "Ди Мария", "alt": ["ЛП"]},
-                {"name": "Бекхэм", "alt": ["ЦП"]},
-                {"name": "Лукас", "alt": []},
+            "ПВ": [
+                {"name": "Бэйл", "alt": ["ПП"]},
+                {"name": "Фигу", "alt": []},
+                {"name": "Ди Мария", "alt": ["ПП"]},
+                {"name": "Лукас Васкес", "alt": ["ПЗ"]},
             ],
             "ФРВ": [
-                {"name": "Рауль", "alt": ["ЦАП"]},
-                {"name": "Бензема", "alt": ["ЦАП"]},
+                {"name": "Рауль", "alt": []},
+                {"name": "Бензема", "alt": []},
                 {"name": "Игуаин", "alt": []},
-                {"name": "Мората", "alt": []},
-                {"name": "Роналдо Браз.", "alt": []},
+                {"name": "Роналдо", "alt": []},
+                {"name": "Мбаппе", "alt": []},
             ],
         },
         "coaches": ["Дель Боске", "Моуринью", "Анчелотти", "Зидан"],
@@ -242,10 +238,18 @@ def build_options(st, chosen):
     free_slots = [i for i in range(len(scheme)) if i not in occupied]
     options = []
 
+    # любой свободный слот: родной — обычный, неродной — «не по позиции»
     for i in free_slots:
-        if player_can_play(chosen["pos"], chosen["alt"], scheme[i]):
-            options.append({"type": "place", "slot_index": i, "slot_pos": scheme[i], "moves": []})
+        can = player_can_play(chosen["pos"], chosen["alt"], scheme[i])
+        options.append({
+            "type": "place",
+            "slot_index": i,
+            "slot_pos": scheme[i],
+            "moves": [],
+            "off_position": not can
+        })
 
+    # перестановки: только валидные (оба игрока могут на новые позиции)
     for occ_idx, occ in occupied.items():
         if not player_can_play(chosen["pos"], chosen["alt"], scheme[occ_idx]):
             continue
@@ -258,10 +262,6 @@ def build_options(st, chosen):
                     "moves": [{"from_slot": occ_idx, "to_slot": free_idx,
                                "player": occ["name"], "to_pos": scheme[free_idx]}],
                 })
-
-    if not options and len(st["starters"]) == 10:
-        for i in free_slots:
-            options.append({"type": "place", "slot_index": i, "slot_pos": scheme[i], "moves": [], "off_position": True})
 
     return options
 
