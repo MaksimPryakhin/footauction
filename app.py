@@ -113,7 +113,7 @@ SCHEMES = {
     "4-2-3-1": ["ВРТ", "ЦЗ", "ЦЗ", "ЛЗ", "ПЗ", "ЦОП", "ЦП", "ЛВ", "ЦАП", "ПВ", "ФРВ"],
 }
 
-POS_TO_POOL = {"ЛВ": "ЛП", "ПВ": "ПП"}
+POS_TO_POOL = {"ЛВ": "ЛП", "ПВ": "ПП", "ЛП": "ЛВ", "ПП": "ПВ"}
 
 CLUBS = {
     "Реал": {
@@ -300,16 +300,29 @@ def draft_next_trio():
         st["trio"] = []
         return
     if len(st["pool"]) < 3:
+        # элементов не хватает — переходим к заменам/подтверждению
         st["trio"] = []
-        return
-    for _ in range(50):
-        trio = random.sample(st["pool"], 3)
-        if st["coach"] is not None and all(p["type"] == "coach" for p in trio):
-            continue
-        st["trio"] = trio
+        if len(st["starters"]) >= 11 and st["coach"] is not None:
+            st["sub_phase"] = True
+            st["sub_index"] = 0
+        else:
+            st["confirm_phase"] = True
         return
     st["trio"] = random.sample(st["pool"], 3)
 
+@socketio.on('draft_skip_trio')
+def handle_draft_skip_trio(data):
+    st = DRAFT_STATE
+    if not st["active"] or st["sub_phase"] or st["confirm_phase"] or st["pending_choice"]:
+        return
+    if data.get('player_index') != st["current_player_index"]:
+        return
+    if not st["trio"]:
+        return
+    st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
+    st["trio"] = []
+    draft_next_trio()
+    draft_emit()
 
 @socketio.on('draft_start')
 def handle_draft_start(data):
@@ -355,18 +368,25 @@ def handle_draft_pick(data):
     if idx < 0 or idx >= len(st["trio"]):
         return
     chosen = st["trio"][idx]
+
+    # Зидан: если уже выбран тренером — игрока нельзя
+    if chosen["type"] == "player" and st["coach"] == chosen["name"]:
+        return
+    # Зидан: если уже в старте — тренера нельзя
     if chosen["type"] == "coach":
         if st["coach"] is not None:
             return
+        if any(s["name"] == chosen["name"] for s in st["starters"]):
+            return
+
+    if chosen["type"] == "coach":
         st["coach"] = chosen["name"]
-        st["pool"] = [p for p in st["pool"] if not (p["type"] == "player" and p["name"] == chosen["name"])]
         st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
         st["trio"] = []
         draft_next_trio()
         draft_emit()
         return
 
-    # ВСЕГДА показываем выбор позиции
     options = build_options(st, chosen)
     st["pending_choice"] = {"chosen": chosen, "options": options}
     draft_emit()
@@ -385,7 +405,6 @@ def handle_draft_choose_position(data):
         return
     chosen = st["pending_choice"]["chosen"]
     apply_option(st, chosen, opts[opt_idx])
-    st["pool"] = [p for p in st["pool"] if not (p["type"] == "coach" and p["name"] == chosen["name"])]
     st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
     st["pending_choice"] = None
     st["trio"] = []
