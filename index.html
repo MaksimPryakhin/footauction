@@ -38,6 +38,9 @@
         .scheme-list .filled { color: var(--accent); }
         .scheme-list .empty { color: #555; }
         .scheme-list .offpos { color: #ff9800; }
+        .scheme-list .draggable { cursor: grab; }
+        .scheme-list .draggable:active { cursor: grabbing; }
+        .scheme-list .dragover { background: #333; outline: 2px dashed var(--accent); }
         .draft-list { text-align: left; color: #ccc; font-size: 14px; }
         #screen-draft { position: relative; z-index: 10; }
     </style>
@@ -142,8 +145,8 @@
         const socket = io();
         let myPlayerIndex = -1;
         let currentGame = null;
+        let dragFromSlot = null;
 
-        // ===== динамические кнопки схем =====
         function renderSchemeButtons() {
             const container = document.getElementById('scheme-buttons');
             container.innerHTML = '';
@@ -173,7 +176,6 @@
         });
 
         socket.on('state_update', (state) => {
-            console.log('state_update', state);
             document.getElementById('screen-start').classList.add('hidden');
             document.getElementById('screen-choose-game').classList.add('hidden');
             document.getElementById('screen-draft').classList.add('hidden');
@@ -207,7 +209,6 @@
 
         function chooseGame(mode) {
             if (myPlayerIndex !== 0) return;
-            console.log('chooseGame', mode);
             currentGame = mode;
             document.getElementById('screen-choose-game').classList.add('hidden');
             if (mode === 'auction') {
@@ -223,16 +224,11 @@
 
         function startGame(theme) {
             if (myPlayerIndex !== 0) return;
-            console.log('start_game', theme);
             socket.emit('start_game', { theme: theme, player_index: myPlayerIndex });
         }
 
         function startDraft(scheme) {
-            if (myPlayerIndex !== 0) {
-                alert('Схему выбирает только Максим');
-                return;
-            }
-            console.log('draft_start', scheme, myPlayerIndex);
+            if (myPlayerIndex !== 0) { alert('Схему выбирает только Максим'); return; }
             socket.emit('draft_start', {player_index: myPlayerIndex, scheme: scheme, club: 'Реал'});
         }
 
@@ -266,7 +262,6 @@
         }
 
         socket.on('draft_state', (st) => {
-            console.log('draft_state', st);
             document.getElementById('screen-choose-game').classList.add('hidden');
             document.getElementById('screen-start').classList.add('hidden');
             document.getElementById('screen-game').classList.add('hidden');
@@ -280,14 +275,42 @@
 
             const list = document.getElementById('draft-scheme-list');
             list.innerHTML = st.scheme_view.map((s, i) => {
+                const off = st.starters.find(x => x.slot_index === i);
+                let cls = 'empty';
+                let content = `${s.pos}: —`;
                 if (s.name) {
-                    const off = st.starters.find(x => x.slot_index === i);
-                    const cls = (off && off.off_position) ? 'offpos' : 'filled';
-                    return `<div class="${cls}">${s.pos}: <b>${s.name}</b>${(off && off.off_position) ? ' (не по поз.)' : ''}</div>`;
-                } else {
-                    return `<div class="empty">${s.pos}: —</div>`;
+                    cls = (off && off.off_position) ? 'offpos' : 'filled';
+                    content = `${s.pos}: <b>${s.name}</b>${(off && off.off_position) ? ' (не по поз.)' : ''}`;
                 }
+                const dragAttr = s.name ? `draggable="true" data-slot="${i}"` : `data-slot="${i}"`;
+                return `<div class="${cls} draggable" ${dragAttr}>${content}</div>`;
             }).join('');
+
+            // drag-and-drop
+            list.querySelectorAll('[data-slot]').forEach(el => {
+                el.addEventListener('dragstart', (e) => {
+                    if (!el.classList.contains('filled') && !el.classList.contains('offpos')) {
+                        e.preventDefault();
+                        return;
+                    }
+                    dragFromSlot = parseInt(el.dataset.slot);
+                    e.dataTransfer.effectAllowed = 'move';
+                });
+                el.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    el.classList.add('dragover');
+                });
+                el.addEventListener('dragleave', () => el.classList.remove('dragover'));
+                el.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    el.classList.remove('dragover');
+                    if (dragFromSlot === null) return;
+                    const toSlot = parseInt(el.dataset.slot);
+                    if (toSlot === dragFromSlot) { dragFromSlot = null; return; }
+                    socket.emit('draft_move', {player_index: myPlayerIndex, from_slot: dragFromSlot, to_slot: toSlot});
+                    dragFromSlot = null;
+                });
+            });
 
             const trio = document.getElementById('draft-trio');
             trio.innerHTML = '';
@@ -385,7 +408,6 @@
         }
 
         socket.on('draft_finished', (data) => {
-            console.log('draft_finished', data);
             const res = document.getElementById('draft-results');
             res.classList.remove('hidden');
             let html = '<h3>Итоговые составы</h3>';
