@@ -259,12 +259,56 @@ def build_options(st, chosen):
                                "player": occ["name"], "to_pos": scheme[free_idx]}],
                 })
 
-    # если это последний выбор в старте — разрешаем любой свободный слот
     if not options and len(st["starters"]) == 10:
         for i in free_slots:
             options.append({"type": "place", "slot_index": i, "slot_pos": scheme[i], "moves": [], "off_position": True})
 
     return options
+
+
+def draft_emit():
+    st = DRAFT_STATE
+    sub = None
+    if st["sub_phase"] and st["sub_index"] < len(st["subs"]):
+        sub = st["subs"][st["sub_index"]]
+    socketio.emit('draft_state', {
+        "active": st["active"],
+        "club": st["club"],
+        "scheme": st["scheme"],
+        "current_player_index": st["current_player_index"],
+        "current_player_name": game_state["participants"][st["current_player_index"]]["name"],
+        "starters": st["starters"],
+        "scheme_view": draft_scheme_view(st),
+        "coach": st["coach"],
+        "trio": st["trio"],
+        "sub_phase": st["sub_phase"],
+        "sub_decision_pending": st["sub_decision_pending"],
+        "sub": sub,
+        "sub_total": len(st["subs"]),
+        "sub_index": st["sub_index"],
+        "confirm_phase": st["confirm_phase"],
+        "pending_choice": st["pending_choice"],
+        "results": st["results"],
+    })
+
+
+def draft_next_trio():
+    st = DRAFT_STATE
+    if len(st["starters"]) >= 11 and st["coach"] is not None:
+        st["sub_phase"] = True
+        st["sub_index"] = 0
+        st["trio"] = []
+        return
+    if len(st["pool"]) < 3:
+        st["trio"] = []
+        return
+    for _ in range(50):
+        trio = random.sample(st["pool"], 3)
+        if st["coach"] is not None and all(p["type"] == "coach" for p in trio):
+            continue
+        st["trio"] = trio
+        return
+    st["trio"] = random.sample(st["pool"], 3)
 
 
 @socketio.on('draft_start')
