@@ -113,6 +113,9 @@ SCHEMES = {
     "4-2-3-1": ["ВРТ", "ЦЗ", "ЦЗ", "ЛЗ", "ПЗ", "ЦОП", "ЦП", "ЛВ", "ЦАП", "ПВ", "ФРВ"],
 }
 
+# ЛВ/ПВ в схемах маппятся на пул ЛП/ПП, чтобы не было дублей игроков
+POS_TO_POOL = {"ЛВ": "ЛП", "ПВ": "ПП"}
+
 CLUBS = {
     "Реал": {
         "players": {
@@ -125,8 +128,6 @@ CLUBS = {
             "ЦАП": ["Зидан", "Озил", "Джеймс", "Бэйл"],
             "ЛП":  ["Роналдо К.", "Робиньо", "Винисиус", "Асенсио"],
             "ПП":  ["Фигу", "Ди Мария", "Бекхэм", "Лукас"],
-            "ЛВ":  ["Роналдо К.", "Винисиус", "Робиньо", "Асенсио"],
-            "ПВ":  ["Фигу", "Ди Мария", "Бекхэм", "Лукас"],
             "ФРВ": ["Рауль", "Бензема", "Игуаин", "Мората", "Роналдо Браз."],
         },
         "coaches": ["Дель Боске", "Моуринью", "Анчелотти", "Зидан"],
@@ -162,24 +163,59 @@ def draft_build_pool(club):
     return pool
 
 
+def draft_scheme_view(st):
+    """Список 11 слотов схемы с именами игроков (или None)."""
+    scheme = SCHEMES[st["scheme"]]
+    view = []
+    starters = st["starters"]
+    for i, pos in enumerate(scheme):
+        name = starters[i]["name"] if i < len(starters) else None
+        view.append({"pos": pos, "name": name})
+    return view
+
+
 def draft_emit():
+    st = DRAFT_STATE
     sub = None
-    if DRAFT_STATE["sub_phase"] and DRAFT_STATE["sub_index"] < len(DRAFT_STATE["subs"]):
-        sub = DRAFT_STATE["subs"][DRAFT_STATE["sub_index"]]
+    if st["sub_phase"] and st["sub_index"] < len(st["subs"]):
+        sub = st["subs"][st["sub_index"]]
     socketio.emit('draft_state', {
-        "active": DRAFT_STATE["active"],
-        "club": DRAFT_STATE["club"],
-        "scheme": DRAFT_STATE["scheme"],
-        "current_player_index": DRAFT_STATE["current_player_index"],
-        "current_player_name": game_state["participants"][DRAFT_STATE["current_player_index"]]["name"],
-        "starters": DRAFT_STATE["starters"],
-        "coach": DRAFT_STATE["coach"],
-        "trio": DRAFT_STATE["trio"],
-        "sub_phase": DRAFT_STATE["sub_phase"],
-        "sub_decision_pending": DRAFT_STATE["sub_decision_pending"],
+        "active": st["active"],
+        "club": st["club"],
+        "scheme": st["scheme"],
+        "current_player_index": st["current_player_index"],
+        "current_player_name": game_state["participants"][st["current_player_index"]]["name"],
+        "starters": st["starters"],
+        "scheme_view": draft_scheme_view(st),
+        "coach": st["coach"],
+        "trio": st["trio"],
+        "sub_phase": st["sub_phase"],
+        "sub_decision_pending": st["sub_decision_pending"],
         "sub": sub,
-        "results": DRAFT_STATE["results"],
+        "sub_total": len(st["subs"]),
+        "sub_index": st["sub_index"],
+        "results": st["results"],
     })
+
+
+def draft_next_trio():
+    st = DRAFT_STATE
+    if len(st["starters"]) >= 11 and st["coach"] is not None:
+        st["sub_phase"] = True
+        st["sub_index"] = 0
+        st["trio"] = []
+        return
+    if len(st["pool"]) < 3:
+        st["trio"] = []
+        return
+    # подбираем тройку так, чтобы не было «только тренеры», если тренер уже есть
+    for _ in range(50):
+        trio = random.sample(st["pool"], 3)
+        if st["coach"] is not None and all(p["type"] == "coach" for p in trio):
+            continue
+        st["trio"] = trio
+        return
+    st["trio"] = random.sample(st["pool"], 3)
 
 
 @socketio.on('draft_start')
@@ -211,19 +247,6 @@ def handle_draft_start(data):
     draft_emit()
 
 
-def draft_next_trio():
-    st = DRAFT_STATE
-    if len(st["starters"]) >= 11 and st["coach"] is not None:
-        st["sub_phase"] = True
-        st["sub_index"] = 0
-        st["trio"] = []
-        return
-    if len(st["pool"]) < 3:
-        st["trio"] = []
-        return
-    st["trio"] = random.sample(st["pool"], 3)
-
-
 @socketio.on('draft_pick')
 def handle_draft_pick(data):
     st = DRAFT_STATE
@@ -236,8 +259,9 @@ def handle_draft_pick(data):
         return
     chosen = st["trio"][idx]
     if chosen["type"] == "coach":
-        if st["coach"] is None:
-            st["coach"] = chosen["name"]
+        if st["coach"] is not None:
+            return  # второго тренера нельзя
+        st["coach"] = chosen["name"]
     else:
         if len(st["starters"]) < 11:
             st["starters"].append(chosen)
@@ -255,7 +279,13 @@ def handle_draft_sub_decision(data):
     if data.get('player_index') != st["current_player_index"]:
         return
     if not data.get('use'):
-        draft_finish_current()
+        # отказ — переходим к следующей замене
+        st["sub_index"] += 1
+        st["sub_decision_pending"] = False
+        if st["sub_index"] >= len(st["subs"]):
+            draft_finish_current()
+        else:
+            draft_emit()
         return
     st["sub_decision_pending"] = True
     draft_emit()
