@@ -115,7 +115,6 @@ SCHEMES = {
 
 POS_TO_POOL = {"ЛВ": "ЛП", "ПВ": "ПП"}
 
-# Пул Реала: у каждого игрока основная позиция + альтернативные (если есть)
 CLUBS = {
     "Реал": {
         "players": {
@@ -194,7 +193,7 @@ DRAFT_STATE = {
     "scheme": "4-4-2",
     "pool": [],
     "subs": [],
-    "starters": [],   # список {"name","pos","slot_index","type"}
+    "starters": [],
     "coach": None,
     "trio": [],
     "current_player_index": 0,
@@ -205,8 +204,7 @@ DRAFT_STATE = {
     "sub_used": None,
     "sub_decision_pending": False,
     "confirm_phase": False,
-    # состояние выбора позиции/перестановки
-    "pending_choice": None,  # {"chosen": {...}, "options": [...]}
+    "pending_choice": None,
 }
 
 
@@ -238,68 +236,19 @@ def draft_scheme_view(st):
     return view
 
 
-def draft_emit():
-    st = DRAFT_STATE
-    sub = None
-    if st["sub_phase"] and st["sub_index"] < len(st["subs"]):
-        sub = st["subs"][st["sub_index"]]
-    socketio.emit('draft_state', {
-        "active": st["active"],
-        "club": st["club"],
-        "scheme": st["scheme"],
-        "current_player_index": st["current_player_index"],
-        "current_player_name": game_state["participants"][st["current_player_index"]]["name"],
-        "starters": st["starters"],
-        "scheme_view": draft_scheme_view(st),
-        "coach": st["coach"],
-        "trio": st["trio"],
-        "sub_phase": st["sub_phase"],
-        "sub_decision_pending": st["sub_decision_pending"],
-        "sub": sub,
-        "sub_total": len(st["subs"]),
-        "sub_index": st["sub_index"],
-        "confirm_phase": st["confirm_phase"],
-        "pending_choice": st["pending_choice"],
-        "results": st["results"],
-    })
-
-
-def draft_next_trio():
-    st = DRAFT_STATE
-    if len(st["starters"]) >= 11 and st["coach"] is not None:
-        st["sub_phase"] = True
-        st["sub_index"] = 0
-        st["trio"] = []
-        return
-    if len(st["pool"]) < 3:
-        st["trio"] = []
-        return
-    for _ in range(50):
-        trio = random.sample(st["pool"], 3)
-        if st["coach"] is not None and all(p["type"] == "coach" for p in trio):
-            continue
-        st["trio"] = trio
-        return
-    st["trio"] = random.sample(st["pool"], 3)
-
-
 def build_options(st, chosen):
-    """Возвращает список вариантов: свободные слоты + перестановки."""
     scheme = SCHEMES[st["scheme"]]
     occupied = {s["slot_index"]: s for s in st["starters"]}
     free_slots = [i for i in range(len(scheme)) if i not in occupied]
     options = []
 
-    # прямые постановки
     for i in free_slots:
         if player_can_play(chosen["pos"], chosen["alt"], scheme[i]):
             options.append({"type": "place", "slot_index": i, "slot_pos": scheme[i], "moves": []})
 
-    # перестановки: новый игрок встаёт на слот занятого X, X сдвигается на свободный
     for occ_idx, occ in occupied.items():
         if not player_can_play(chosen["pos"], chosen["alt"], scheme[occ_idx]):
             continue
-        # куда можно сдвинуть occ
         for free_idx in free_slots:
             if player_can_play(occ["pos"], occ.get("alt", []), scheme[free_idx]):
                 options.append({
@@ -309,6 +258,12 @@ def build_options(st, chosen):
                     "moves": [{"from_slot": occ_idx, "to_slot": free_idx,
                                "player": occ["name"], "to_pos": scheme[free_idx]}],
                 })
+
+    # если это последний выбор в старте — разрешаем любой свободный слот
+    if not options and len(st["starters"]) == 10:
+        for i in free_slots:
+            options.append({"type": "place", "slot_index": i, "slot_pos": scheme[i], "moves": [], "off_position": True})
+
     return options
 
 
@@ -351,7 +306,7 @@ def handle_draft_pick(data):
     if data.get('player_index') != st["current_player_index"]:
         return
     if st["pending_choice"] is not None:
-        return  # ждём выбор позиции
+        return
     idx = int(data.get('index', -1))
     if idx < 0 or idx >= len(st["trio"]):
         return
@@ -360,6 +315,7 @@ def handle_draft_pick(data):
         if st["coach"] is not None:
             return
         st["coach"] = chosen["name"]
+        st["pool"] = [p for p in st["pool"] if not (p["type"] == "player" and p["name"] == chosen["name"])]
         st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
         st["trio"] = []
         draft_next_trio()
@@ -368,9 +324,10 @@ def handle_draft_pick(data):
 
     options = build_options(st, chosen)
     if not options:
-        return  # нет места — сервер не пропускает (кнопка должна быть disabled)
+        return
     if len(options) == 1:
         apply_option(st, chosen, options[0])
+        st["pool"] = [p for p in st["pool"] if not (p["type"] == "coach" and p["name"] == chosen["name"])]
         st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
         st["trio"] = []
         draft_next_trio()
@@ -393,8 +350,9 @@ def handle_draft_choose_position(data):
         return
     chosen = st["pending_choice"]["chosen"]
     apply_option(st, chosen, opts[opt_idx])
-    st["pending_choice"] = None
+    st["pool"] = [p for p in st["pool"] if not (p["type"] == "coach" and p["name"] == chosen["name"])]
     st["pool"] = [p for p in st["pool"] if p not in st["trio"]]
+    st["pending_choice"] = None
     st["trio"] = []
     draft_next_trio()
     draft_emit()
@@ -404,10 +362,10 @@ def apply_option(st, chosen, opt):
     if opt["type"] == "place":
         st["starters"].append({
             "name": chosen["name"], "pos": chosen["pos"], "alt": chosen["alt"],
-            "slot_index": opt["slot_index"], "type": "player"
+            "slot_index": opt["slot_index"], "type": "player",
+            "off_position": opt.get("off_position", False)
         })
-    else:  # swap
-        # сдвигаем старого
+    else:
         for mv in opt["moves"]:
             for s in st["starters"]:
                 if s["slot_index"] == mv["from_slot"]:
@@ -450,10 +408,10 @@ def handle_draft_sub_apply(data):
         return
     sub = st["subs"][st["sub_index"]]
     old = st["starters"][idx]
-    # заменяем: новый игрок встаёт на слот старого
     st["starters"][idx] = {
         "name": sub["name"], "pos": sub["pos"], "alt": sub.get("alt", []),
-        "slot_index": old["slot_index"], "type": "player"
+        "slot_index": old["slot_index"], "type": "player",
+        "off_position": old.get("off_position", False)
     }
     st["sub_used"] = {"from": old["name"], "to": sub["name"]}
     st["sub_decision_pending"] = False
@@ -476,7 +434,7 @@ def handle_draft_confirm(data):
 def draft_finish_current():
     st = DRAFT_STATE
     st["results"][st["current_player_index"]] = {
-        "starters": [{"name": p["name"], "pos": p["pos"], "slot_pos": SCHEMES[st["scheme"]][p["slot_index"]]} for p in st["starters"]],
+        "starters": [{"name": p["name"], "pos": p["pos"], "slot_pos": SCHEMES[st["scheme"]][p["slot_index"]], "off_position": p.get("off_position", False)} for p in st["starters"]],
         "coach": st["coach"],
         "scheme": st["scheme"],
         "sub_used": st["sub_used"],
