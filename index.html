@@ -31,6 +31,12 @@
         .log { max-height: 150px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; font-family: monospace; font-size: 14px;}
         .hidden { display: none !important; }
         .turn-banner { font-size: 20px; font-weight: bold; color: #ffeb3b; margin-bottom: 10px; text-transform: uppercase; }
+        .draft-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 700px) { .draft-layout { grid-template-columns: 1fr; } }
+        .scheme-list { background: #000; border-radius: 8px; padding: 10px; font-size: 14px; }
+        .scheme-list div { padding: 3px 0; border-bottom: 1px solid #222; }
+        .scheme-list .filled { color: var(--accent); }
+        .scheme-list .empty { color: #555; }
         .draft-list { text-align: left; color: #ccc; font-size: 14px; }
     </style>
 </head>
@@ -72,28 +78,23 @@
             <div class="card">
                 <div class="players-grid" id="players-container"></div>
             </div>
-
             <div class="card auction-box" id="auction-area">
                 <div class="turn-banner" id="turn-banner">Ход: ...</div>
                 <h3 id="pos-title">Позиция: ...</h3>
                 <div class="player-reveal" id="player-name">???</div>
                 <div id="player-cat" style="color:#aaa; margin-bottom:10px;">...</div>
                 <div style="font-size: 24px; margin: 10px 0;">Цена: <span id="current-price" style="color:#4caf50; font-weight:bold;">$0.00</span></div>
-
                 <div class="controls" id="auction-controls">
                     <input type="number" id="bid-input" placeholder="Сумма" min="1" step="1">
                     <button class="btn btn-success" onclick="placeBid()" id="btn-bid">Поставить</button>
                     <button class="btn btn-danger" onclick="passAuction()" id="btn-pass">Уступить</button>
                 </div>
-
                 <div class="controls hidden" id="decision-controls">
                     <button class="btn btn-warning" onclick="soloDecision(true)" id="btn-take">Взять за $1</button>
                     <button class="btn btn-danger" onclick="soloDecision(false)" id="btn-skip">Отказаться</button>
                 </div>
-
                 <div id="waiting-text" class="hidden" style="color:#aaa; margin-top:10px; text-align:center;"></div>
             </div>
-
             <div class="card">
                 <h3>Лог</h3>
                 <div class="log" id="log-container"></div>
@@ -114,9 +115,18 @@
                 </div>
                 <div id="draft-game" class="hidden">
                     <p id="draft-status" class="turn-banner"></p>
-                    <p style="text-align:center;">Старт: <span id="draft-starters-count">0</span>/11 · Тренер: <span id="draft-coach">—</span></p>
-                    <div class="controls" id="draft-trio"></div>
-                    <div id="draft-sub-area" class="hidden" style="text-align:center;"></div>
+                    <div class="draft-layout">
+                        <div>
+                            <h3>Тройка</h3>
+                            <div class="controls" id="draft-trio"></div>
+                            <div id="draft-sub-area" class="hidden" style="text-align:center;"></div>
+                        </div>
+                        <div>
+                            <h3>Схема</h3>
+                            <div class="scheme-list" id="draft-scheme-list"></div>
+                            <p style="text-align:center; margin-top:10px;">Тренер: <b id="draft-coach">—</b></p>
+                        </div>
+                    </div>
                     <div id="draft-results" class="hidden"></div>
                 </div>
             </div>
@@ -209,8 +219,16 @@
 
             document.getElementById('draft-status').textContent =
                 `Ход: ${st.current_player_name}. Схема: ${st.scheme}`;
-            document.getElementById('draft-starters-count').textContent = st.starters.length;
             document.getElementById('draft-coach').textContent = st.coach || '—';
+
+            const list = document.getElementById('draft-scheme-list');
+            list.innerHTML = st.scheme_view.map(s => {
+                if (s.name) {
+                    return `<div class="filled">${s.pos}: <b>${s.name}</b></div>`;
+                } else {
+                    return `<div class="empty">${s.pos}: —</div>`;
+                }
+            }).join('');
 
             const trio = document.getElementById('draft-trio');
             trio.innerHTML = '';
@@ -219,7 +237,9 @@
                 const b = document.createElement('button');
                 b.className = 'btn btn-success';
                 b.textContent = `${p.name} (${p.pos})`;
-                b.disabled = !isMyTurn;
+                const isCoachBlocked = (p.type === 'coach' && st.coach);
+                b.disabled = !isMyTurn || isCoachBlocked;
+                if (isCoachBlocked) b.textContent += ' [тренер уже есть]';
                 b.onclick = () => socket.emit('draft_pick', {player_index: myPlayerIndex, index: i});
                 trio.appendChild(b);
             });
@@ -228,8 +248,9 @@
             subArea.innerHTML = '';
             if (st.sub_phase && st.sub) {
                 subArea.classList.remove('hidden');
+                const counter = `<p style="color:#aaa;">Замена ${st.sub_index + 1} из ${st.sub_total}</p>`;
                 if (st.sub_decision_pending) {
-                    subArea.innerHTML = `<p>Кого менять на <b>${st.sub.name} (${st.sub.pos})</b>?</p>`;
+                    subArea.innerHTML = counter + `<p>Кого менять на <b>${st.sub.name} (${st.sub.pos})</b>?</p>`;
                     st.starters.forEach((p, i) => {
                         const b = document.createElement('button');
                         b.className = 'btn btn-warning';
@@ -239,7 +260,7 @@
                         subArea.appendChild(b);
                     });
                 } else {
-                    subArea.innerHTML = `<p>Выпала замена: <b>${st.sub.name} (${st.sub.pos})</b>. Менять?</p>`;
+                    subArea.innerHTML = counter + `<p>Выпала замена: <b>${st.sub.name} (${st.sub.pos})</b>. Менять?</p>`;
                     const yes = document.createElement('button');
                     yes.className = 'btn btn-success';
                     yes.textContent = 'Да';
@@ -247,7 +268,7 @@
                     yes.onclick = () => socket.emit('draft_sub_decision', {player_index: myPlayerIndex, use: true});
                     const no = document.createElement('button');
                     no.className = 'btn btn-danger';
-                    no.textContent = 'Нет';
+                    no.textContent = 'Нет, следующая';
                     no.disabled = st.current_player_index !== myPlayerIndex;
                     no.onclick = () => socket.emit('draft_sub_decision', {player_index: myPlayerIndex, use: false});
                     subArea.appendChild(yes);
