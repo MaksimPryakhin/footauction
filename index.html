@@ -44,6 +44,7 @@
         .scheme-list .dragover { background: #333; outline: 2px dashed var(--accent); }
         .draft-list { text-align: left; color: #ccc; font-size: 14px; }
         #screen-draft { position: relative; z-index: 10; }
+        .info-btn { padding: 4px 10px; font-size: 14px; background: #2196f3; color: white; border: none; border-radius: 6px; cursor: pointer; margin-left: 5px; }
     </style>
 </head>
 <body>
@@ -141,6 +142,17 @@
                     <div id="draft-results" class="hidden"></div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div id="info-modal" class="hidden" style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100;">
+        <div class="card" style="max-width: 520px; width: 90%; text-align: left;">
+            <h3 id="info-name" style="text-align:center;"></h3>
+            <p><b>Годы в клубе:</b> <span id="info-years">—</span></p>
+            <p><b>Статистика:</b> <span id="info-stats">—</span></p>
+            <p><b>Достижения:</b> <span id="info-trophies">—</span></p>
+            <p><b>Как играл:</b> <span id="info-style">—</span></p>
+            <div style="text-align:center;"><button class="btn btn-primary" onclick="closeInfo()">Закрыть</button></div>
         </div>
     </div>
 
@@ -277,6 +289,19 @@
             return false;
         }
 
+        function showInfo(info, name) {
+            document.getElementById('info-name').textContent = info && info.full_name ? info.full_name : name;
+            document.getElementById('info-years').textContent = info ? (info.years || '—') : 'Нет информации';
+            document.getElementById('info-stats').textContent = info ? (info.stats || '—') : '—';
+            document.getElementById('info-trophies').textContent = info ? (info.trophies || '—') : '—';
+            document.getElementById('info-style').textContent = info ? (info.style || '—') : '—';
+            document.getElementById('info-modal').classList.remove('hidden');
+        }
+        function closeInfo() {
+            document.getElementById('info-modal').classList.add('hidden');
+        }
+        window.showInfo = showInfo;
+
         socket.on('draft_state', (st) => {
             document.getElementById('screen-choose-game').classList.add('hidden');
             document.getElementById('screen-start').classList.add('hidden');
@@ -297,7 +322,8 @@
                 let content = `${s.pos}: —`;
                 if (s.name) {
                     cls = (off && off.off_position) ? 'offpos' : 'filled';
-                    content = `${s.pos}: <b>${s.name}</b>${(off && off.off_position) ? ' (не по поз.)' : ''}`;
+                    const infoData = off && off.info ? JSON.stringify(off.info).replace(/'/g, "&apos;") : 'null';
+                    content = `${s.pos}: <b>${s.name}</b> <button class="info-btn" onclick='showInfo(${infoData}, "${s.name}")'>i</button>${(off && off.off_position) ? ' (не по поз.)' : ''}`;
                 }
                 const dragAttr = s.name ? `draggable="true" data-slot="${i}"` : `data-slot="${i}"`;
                 return `<div class="${cls} draggable" ${dragAttr}>${content}</div>`;
@@ -344,6 +370,11 @@
             };
 
             st.trio.forEach((p, i) => {
+                const wrapper = document.createElement('div');
+                wrapper.style.display = 'flex';
+                wrapper.style.gap = '5px';
+                wrapper.style.alignItems = 'center';
+
                 const b = document.createElement('button');
                 b.className = 'btn btn-success';
                 b.textContent = `${p.name} (${p.pos}${p.alt && p.alt.length ? '/' + p.alt.join('/') : ''})`;
@@ -351,11 +382,19 @@
                 if (isCoachPick && p.type !== 'coach') b.textContent += ' [нужен тренер]';
                 else if (p.type === 'coach' && st.coach) b.textContent += ' [тренер уже есть]';
                 else if (p.type === 'coach' && st.starters.some(s => s.name === p.name)) b.textContent += ' [уже в старте]';
-                else if (p.type === 'player' && st.coach === p.name) b.textContent += ' [Зидан уже тренер]';
+                else if (p.type === 'player' && st.coach === p.name) b.textContent += ' [уже тренер]';
                 else if (p.type === 'player' && !hasAnyOption(st, p)) b.textContent += ' [нет места]';
                 b.disabled = disabled;
                 b.onclick = () => socket.emit('draft_pick', {player_index: myPlayerIndex, index: i});
-                trio.appendChild(b);
+                wrapper.appendChild(b);
+
+                const infoBtn = document.createElement('button');
+                infoBtn.className = 'info-btn';
+                infoBtn.textContent = 'i';
+                infoBtn.onclick = () => showInfo(p.info, p.name);
+                wrapper.appendChild(infoBtn);
+
+                trio.appendChild(wrapper);
             });
 
             if (!isCoachPick && st.trio.length > 0 && st.trio.every(p => checkDisabled(p)) && isMyTurn) {
@@ -397,12 +436,26 @@
                 if (st.sub_decision_pending) {
                     subArea.innerHTML = counter + `<p>Кого менять на <b>${st.sub.name} (${st.sub.pos})</b>?</p>`;
                     st.starters.forEach((p, i) => {
+                        const wrapper = document.createElement('div');
+                        wrapper.style.display = 'inline-flex';
+                        wrapper.style.gap = '5px';
+                        wrapper.style.alignItems = 'center';
+                        wrapper.style.margin = '3px';
+
                         const b = document.createElement('button');
                         b.className = 'btn btn-warning';
                         b.textContent = `${p.name} (${st.scheme_view[p.slot_index].pos})`;
                         b.disabled = st.current_player_index !== myPlayerIndex;
                         b.onclick = () => socket.emit('draft_sub_apply', {player_index: myPlayerIndex, starter_index: i});
-                        subArea.appendChild(b);
+                        wrapper.appendChild(b);
+
+                        const infoBtn = document.createElement('button');
+                        infoBtn.className = 'info-btn';
+                        infoBtn.textContent = 'i';
+                        infoBtn.onclick = () => showInfo(p.info, p.name);
+                        wrapper.appendChild(infoBtn);
+
+                        subArea.appendChild(wrapper);
                     });
                 } else {
                     subArea.innerHTML = counter + `<p>Выпала замена: <b>${st.sub.name} (${st.sub.pos})</b>. Менять?</p>`;
@@ -418,6 +471,12 @@
                     no.onclick = () => socket.emit('draft_sub_decision', {player_index: myPlayerIndex, use: false});
                     subArea.appendChild(yes);
                     subArea.appendChild(no);
+
+                    const infoBtn = document.createElement('button');
+                    infoBtn.className = 'info-btn';
+                    infoBtn.textContent = 'i';
+                    infoBtn.onclick = () => showInfo(st.sub.info, st.sub.name);
+                    subArea.appendChild(infoBtn);
                 }
             } else {
                 subArea.classList.add('hidden');
@@ -429,7 +488,7 @@
                 const cl = document.getElementById('draft-confirm-list');
                 cl.innerHTML = '<ul>' + [...st.starters]
                     .sort((a, b) => a.slot_index - b.slot_index)
-                    .map(p => `<li>${st.scheme_view[p.slot_index].pos}: <b>${p.name}</b>${p.off_position ? ' (не по поз.)' : ''}</li>`)
+                    .map(p => `<li>${st.scheme_view[p.slot_index].pos}: <b>${p.name}</b> <button class="info-btn" onclick='showInfo(${JSON.stringify(p.info || null).replace(/'/g, "&apos;")}, "${p.name}")'>i</button>${p.off_position ? ' (не по поз.)' : ''}</li>`)
                     .join('') + '</ul>';
                 document.getElementById('draft-confirm-coach').textContent = st.coach || '—';
             } else {
